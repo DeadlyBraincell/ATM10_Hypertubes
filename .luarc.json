@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/lua-language-server/main/doc/.vscode/settings.schema.json",
+  "Lua.runtime.version": "Lua 5.1",
+  "Lua.workspace.library": [
+    "D:\\lib\\computercraft\\library"
+  ],
+  "Lua.workspace.checkThirdParty": false,
+  "Lua.diagnostics.globals": [
+    "peripheral",
+    "read",
+    "write",
+    "sleep",
+    "printError",
+    "os",
+    "redstone",
+    "rednet",
+    "modem",
+    "http",
+    "term",
+    "colors",
+    "colours",
+    "keys",
+    "turtle",
+    "fs",
+    "io",
+    "textutils",
+    "parallel",
+    "settings",
+    "shell",
+    "multishell",
+    "vector",
+    "window",
+    "paintutils",
+    "disk",
+    "gps",
+    "speaker",
+    "monitor"
+  ],
+    "completion.autoRequire": false
+}
