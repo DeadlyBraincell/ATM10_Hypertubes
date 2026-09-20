@@ -168,8 +168,14 @@
   pairs up the two ends that name each other. The answer comes from the
   computer standing next to the tube, so it is corrected by whoever rebuilds
   that junction, at the moment they rebuild it, and there is no second copy to
-  fall out of date. Until every named neighbour has registered and agreed, the
-  map is incomplete and the network stays locked, naming what is missing.
+  fall out of date.
+
+  A tube whose far end has not registered, or has not been told about this end
+  yet, is a DEAD END, not a fault. It is left out of the map, logged, and
+  routed around. A network being extended is the normal case, and locking it
+  down every time somebody starts laying a new branch would make the system
+  most fragile exactly when it is being worked on. Two stations with no path
+  between them get "No route", which is simply true.
 
 
   ---------------------------------------------------------------------------
@@ -190,6 +196,11 @@
   read a junction, so it cannot tell a controller that died from one that is
   about to put somebody into a wall. Refusing to dispatch is the only honest
   answer, and the log names each missing node with how long it has been quiet.
+
+  Note what this does NOT cover: a tube that was never finished. Only a
+  computer that registered and then went quiet locks the network. "Not built
+  yet" and "was here and now is not" are different claims, and only the second
+  one means something is wrong.
 
   Routes already in flight are left alone. Their locks still hold, their
   junctions are already set, and a player in a tube is better off arriving

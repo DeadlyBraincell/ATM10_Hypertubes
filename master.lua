@@ -32,13 +32,6 @@ local Master = {}
 ---@type table<NodeId, Node>
 NODES = {}
 
----Set while the map is incomplete or contradictory: something has not
----registered yet, or two computers disagree about a tube. Unlike an
----unreachable node this does not resolve itself by waiting -- it resolves
----when the missing computer is set up -- so it holds the lockdown down.
----@type string|nil
-local topologyError = nil
-
 -- Release nodes and links behind the pod as its scanners confirm it has passed.
 -- Roughly doubles throughput, but needs a scanner on every junction: a stretch
 -- with none reports nothing, and freeing it would be a guess. Leave it off
@@ -285,7 +278,8 @@ end
 local ACCESS_PORT = "tube"
 
 ---Rebuild NODES from the registry.
----@return string[] problems  everything still missing or contradictory
+---@return string[] problems  contradictions: someone is wrong about something
+---@return string[] loose     tubes with nothing joined to the far end yet
 function Master.buildTopology()
   ---@type table<NodeId, Node>
   local nodes = {}
@@ -296,6 +290,10 @@ function Master.buildTopology()
 
   local problems = {}
   local function complain(text) problems[#problems + 1] = text end
+
+  ---@type string[]
+  local loose = {}
+  local function dangling(text) loose[#loose + 1] = text end
 
   -- 1. every registration contributes a node and its claims
   for nodeId, entry in pairs(registry) do
@@ -336,17 +334,22 @@ function Master.buildTopology()
   end
 
   -- 2. pair the halves
+  --
+  -- A tube whose far end has not registered, or has not been told about this
+  -- end yet, is simply not a link. It is a dead end: half-built, or built and
+  -- not yet configured. That is the ordinary state of a network somebody is
+  -- still laying, so it is reported and routed around rather than treated as a
+  -- fault -- routing among the parts that ARE joined up keeps working.
   for nodeId, ports in pairs(claims) do
     for port, neighbourId in pairs(ports) do
       if type(neighbourId) ~= "string" or neighbourId == "" then
-        complain(nodeId .. "." .. port .. ": nothing named at the far end")
+        -- deliberately blank: this tube is not built. Nothing to report.
 
       elseif neighbourId == nodeId then
         complain(nodeId .. "." .. port .. " points at itself")
 
       elseif nodes[neighbourId] == nil then
-        complain(nodeId .. "." .. port .. " leads to " .. neighbourId
-          .. ", which has not registered")
+        dangling(nodeId .. " -> " .. neighbourId .. " (has not registered)")
 
       else
         -- Which of the neighbour's ports names us back? Only one may, or
@@ -357,8 +360,7 @@ function Master.buildTopology()
         end
 
         if #facing == 0 then
-          complain(neighbourId .. " does not point back at " .. nodeId
-            .. " (check its setup)")
+          dangling(nodeId .. " -> " .. neighbourId .. " (not pointing back)")
         elseif #facing > 1 then
           complain(neighbourId .. " claims " .. #facing .. " tubes to " .. nodeId
             .. "; they cannot be told apart")
@@ -381,44 +383,50 @@ function Master.buildTopology()
 
   NODES = nodes
   table.sort(problems)
-  return problems
+  table.sort(loose)
+  return problems, loose
 end
 
----Rebuild the map and decide whether the network can run on it.
+---Rebuild the map and say what it looks like.
+---
+---This never locks the network. A tube that leads nowhere yet is a dead end,
+---not a failure: routing works perfectly well among whatever IS joined up, and
+---a network being extended is the normal case rather than the exception. Two
+---stations with no path between them simply get "No route", which is the
+---truth, and the log says which tubes are still open-ended.
+---
+---The only thing that closes the network is the audit -- a computer that
+---registered and then stopped answering -- which is a different claim
+---entirely: not "this is not built yet" but "this was here and now is not".
+---
 ---Called at boot and whenever a registration changes something.
 function Master.refreshTopology()
-  local problems = Master.buildTopology()
+  local problems, loose = Master.buildTopology()
 
-  local accessPoints, junctions = 0, 0
+  if next(NODES) == nil then
+    Master.log("topology: nothing has registered yet")
+    return
+  end
+
+  local accessPoints, junctions, ends = 0, 0, 0
   for _, node in pairs(NODES) do
     if node.kind == "access" then accessPoints = accessPoints + 1 end
     if node.kind == "junction" then junctions = junctions + 1 end
+    for _ in pairs(node.links) do ends = ends + 1 end
   end
 
-  if next(NODES) == nil then
-    topologyError = "waiting for the first computer to register"
-    Master.setLockdown(topologyError)
-    return
+  -- every tube is counted from both of its ends
+  Master.log("topology: " .. accessPoints .. " access points, " .. junctions
+    .. " junctions, " .. math.floor(ends / 2) .. " tubes")
+
+  if #loose > 0 then
+    Master.log("  dead ends, still being built:")
+    for _, one in ipairs(loose) do Master.log("    " .. one) end
   end
 
   if #problems > 0 then
-    Master.log("topology: " .. accessPoints .. " access points, " .. junctions
-      .. " junctions, " .. #problems .. " problem(s):")
-    for _, problem in ipairs(problems) do Master.log("  " .. problem) end
-
-    topologyError = "incomplete map: " .. problems[1]
-    Master.setLockdown(topologyError)
-    return
-  end
-
-  Master.log("topology: " .. accessPoints .. " access points, "
-    .. junctions .. " junctions, all linked")
-
-  -- The map is sound. Whether the network is actually THERE is the audit's
-  -- question, so ask it now rather than sitting locked until the next round.
-  if topologyError ~= nil then
-    topologyError = nil
-    Master.beginAudit()
+    Master.log("  CHECK THE SETUP ON THESE:")
+    for _, problem in ipairs(problems) do Master.log("    " .. problem) end
   end
 end
 
@@ -465,14 +473,6 @@ end
 
 function Master.clearLockdown()
   if lockdown == nil then return end
-
-  -- A missing node can come back on its own. A missing topology cannot, and an
-  -- empty one would otherwise pass every audit trivially -- nothing to check --
-  -- and open a network that cannot route anywhere.
-  if topologyError ~= nil then
-    lockdown = topologyError
-    return
-  end
 
   Master.log("lockdown lifted: the whole network answered")
   lockdown = nil
@@ -1243,14 +1243,12 @@ function Master.main(cfg)
   -- what opens the network -- assuming everything is fine until told otherwise
   -- would dispatch routes into junctions nobody has heard from since the
   -- reboot.
-  if topologyError ~= nil then
-    lockdown = topologyError
-  elseif AUDIT_INTERVAL > 0 then
+  if AUDIT_INTERVAL > 0 then
     lockdown = "starting up"
   end
 
-  -- The audit runs even with AUDIT_INTERVAL at 0 if there is no topology,
-  -- because its discover broadcast is also how panels find us at all.
+  -- The audit runs even with AUDIT_INTERVAL at 0, because its discover
+  -- broadcast is also how panels find us at all.
   timers.audit = os.startTimer(1)
 
   while true do
