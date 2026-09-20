@@ -203,8 +203,18 @@ function Controller.applyMove(nodeId, entry, exit)
 
   local level = levelFor(node, entry, exit)
   if level == nil then
+    -- Say what this junction actually believes, because the usual cause is
+    -- that it and the master disagree about what its tubes are called.
+    common.say(nodeId .. ": cannot route " .. tostring(entry)
+      .. " -> " .. tostring(exit))
+    common.say("  this junction has a=" .. tostring(node.a)
+      .. " b=" .. tostring(node.b) .. " branch=" .. tostring(node.branch)
+      .. " right=" .. tostring(node.right))
     return false, "cannot route " .. tostring(entry) .. " -> " .. tostring(exit)
   end
+
+  common.debug(nodeId .. ": " .. entry .. " -> " .. exit .. " means "
+    .. node.side .. " " .. (level and "HIGH (turn)" or "LOW (straight)"))
 
   redstone.setOutput(node.side, level)
   return true, nil
@@ -245,9 +255,38 @@ local function sayHello()
   link:send({ cmd = "hello", role = "node", nodes = ids, mode = MODE, config = CFG })
 end
 
+---Print what this controller thinks it is looking after, and what its lines
+---are doing right now.
+function Controller.dump()
+  common.say("-- this controller --")
+  common.say("  mode " .. MODE .. ", master "
+    .. (link.id and tostring(link.id) or "not found yet"))
+
+  local ids = {}
+  for nodeId in pairs(MANAGED) do ids[#ids + 1] = nodeId end
+  table.sort(ids)
+
+  for _, nodeId in ipairs(ids) do
+    local node = MANAGED[nodeId]
+    local live = redstone.getOutput(node.side)
+
+    common.say("  " .. nodeId .. " on " .. node.side .. " = "
+      .. (live and "HIGH" or "LOW"))
+    common.say("    a=" .. tostring(node.a) .. " b=" .. tostring(node.b)
+      .. " branch=" .. tostring(node.branch) .. " right=" .. tostring(node.right))
+    common.say("    so right now: " .. (live
+      and ("straight run -> " .. tostring(node.branch))
+      or  (tostring(node.a) .. " <-> " .. tostring(node.b))))
+    common.say("    scanner " .. (node.scanner or "none")
+      .. (node.scanner and (" reads " .. tostring(redstone.getInput(node.scanner))) or ""))
+  end
+end
+
 ---@param senderId number
 ---@param msg      table
 local function onMessage(senderId, msg)
+  common.trace("<-", senderId, msg)
+
   if msg.cmd == "set" then
     if MODE == "sensor" then return end
     link:learn(senderId)
@@ -300,6 +339,8 @@ function Controller.main(cfg)
   if MODE ~= "sensor" then Controller.resetAll() end
   sayHello()
 
+  common.say("controller online: " .. MODE .. ". press h for keys")
+
   local sides, owner = detectorSides()
   local risingEdges = common.edgeDetector(sides)
   local retry = os.startTimer(common.HELLO_INTERVAL)
@@ -318,7 +359,20 @@ function Controller.main(cfg)
       -- and to notice a player who left the tube early -- a missed detection
       -- fails the ticket one leg later instead of after the whole route's ETA.
       for _, side in ipairs(risingEdges()) do
+        common.debug("scanner " .. side .. " fired for " .. owner[side])
         link:send({ cmd = "detect", node = owner[side] })
+      end
+
+    elseif event == "key" then
+      if a == keys.s then
+        Controller.dump()
+      elseif a == keys.d then
+        common.setDebug(not common.isDebug())
+        settings.set("hypertube.debug", common.isDebug())
+        settings.save()
+        common.say("tracing " .. (common.isDebug() and "ON" or "off"))
+      elseif a == keys.h then
+        common.say("s state | d tracing")
       end
 
     elseif event == "timer" and a == retry then

@@ -362,8 +362,28 @@ function Panel.main(cfg)
         link:send({ cmd = "enter", node = MY_NODE })
       end
 
+    elseif event == "key" then
+      if a == keys.s then
+        common.say("-- this panel --")
+        common.say("  node " .. tostring(MY_NODE)
+          .. ", master " .. (link.id and tostring(link.id) or "not found yet"))
+        common.say("  " .. #destinations .. " destinations, "
+          .. (lockedReason and ("LOCKED: " .. lockedReason) or "open"))
+        common.say("  showing: " .. tostring(status.state) .. " / " .. tostring(status.text))
+        common.say("  doors " .. tostring(redstone.getOutput(WIRING.doors))
+          .. ", scanner " .. tostring(redstone.getInput(WIRING.detector)))
+      elseif a == keys.d then
+        common.setDebug(not common.isDebug())
+        settings.set("hypertube.debug", common.isDebug())
+        settings.save()
+        common.say("tracing " .. (common.isDebug() and "ON" or "off"))
+      elseif a == keys.h then
+        common.say("s state | d tracing")
+      end
+
     elseif event == "rednet_message" then
       local msg = b
+      common.trace("<-", a, type(msg) == "table" and msg or { raw = tostring(msg) })
       if type(msg) == "table" and type(msg.cmd) == "string" then
         if msg.cmd == "destinations" then
           link:learn(a)

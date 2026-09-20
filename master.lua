@@ -117,8 +117,7 @@ local pumping = false      -- re-entrancy guard for pumpQueue
 
 ---@param message string
 function Master.log(message)
-  -- TODO: mirror to a monitor and/or a log file
-  print(message)
+  common.say(message)
 end
 
 ---Cache only. A miss is recorded so the next discover round asks for it again;
@@ -147,6 +146,8 @@ function Master.sendTo(nodeId, message)
     end
     return false
   end
+
+  common.trace("->", nodeId .. "/" .. id, message)
   rednet.send(id, message, common.PROTOCOL)
   return true
 end
@@ -427,6 +428,171 @@ function Master.refreshTopology()
   if #problems > 0 then
     Master.log("  CHECK THE SETUP ON THESE:")
     for _, problem in ipairs(problems) do Master.log("    " .. problem) end
+  end
+end
+
+
+-- ===========================================================================
+-- 3bc. DIAGNOSTICS
+-- ===========================================================================
+--  The master is the only computer that knows the whole picture, so it is the
+--  one worth interrogating. Press a key on its terminal; see Master.onKey.
+
+---@param path Path
+---@return string
+function Master.describePath(path)
+  local parts = { path[1] and path[1].from or "?" }
+  for _, hop in ipairs(path) do parts[#parts + 1] = hop.to end
+  return table.concat(parts, " -> ")
+end
+
+---Everything reachable from a node, ignoring locks and who is busy.
+---@param startNode NodeId
+---@return table<NodeId, boolean>
+function Master.reachable(startNode)
+  local seen = { [startNode] = true }
+  local queue, head = { startNode }, 1
+
+  while head <= #queue do
+    local current = queue[head]
+    head = head + 1
+
+    local node = NODES[current]
+    for _, link in pairs(node and node.links or {}) do
+      if not seen[link.to] then
+        seen[link.to] = true
+        queue[#queue + 1] = link.to
+      end
+    end
+  end
+
+  return seen
+end
+
+---Say why a route could not be found. Almost always the answer is that the
+---map is in two pieces, and the useful thing is to see which piece each end
+---is in -- so this prints the whole island the origin can reach.
+---@param fromAP NodeId
+---@param toAP   NodeId
+function Master.explainRoute(fromAP, toAP)
+  common.say("no route " .. tostring(fromAP) .. " -> " .. tostring(toAP) .. ":")
+
+  if NODES[fromAP] == nil then
+    common.say("  " .. tostring(fromAP) .. " is not on the map at all")
+  end
+  if NODES[toAP] == nil then
+    common.say("  " .. tostring(toAP) .. " is not on the map at all")
+  end
+  if NODES[fromAP] == nil or NODES[toAP] == nil then return end
+
+  local island = {}
+  for id in pairs(Master.reachable(fromAP)) do island[#island + 1] = id end
+  table.sort(island)
+
+  common.say("  " .. fromAP .. " can reach: " .. table.concat(island, ", "))
+  common.say("  " .. toAP .. " is not among them, so the map is in pieces")
+  common.say("  press t for the map, r for who registered")
+end
+
+function Master.dumpTopology()
+  common.say("-- map --")
+
+  local ids = {}
+  for id in pairs(NODES) do ids[#ids + 1] = id end
+  table.sort(ids)
+
+  if #ids == 0 then common.say("  (empty)") end
+  for _, id in ipairs(ids) do
+    local node = NODES[id]
+    local links = {}
+    for port, link in pairs(node.links) do
+      links[#links + 1] = port .. "->" .. link.to
+    end
+    table.sort(links)
+
+    common.say(("  %-14s %-9s %s"):format(id, node.kind,
+      #links > 0 and table.concat(links, "  ") or "(no tubes)"))
+  end
+end
+
+function Master.dumpRegistry()
+  common.say("-- registered --")
+
+  local ids = {}
+  for id in pairs(registry) do ids[#ids + 1] = id end
+  table.sort(ids)
+
+  if #ids == 0 then common.say("  (nobody yet)") end
+  local now = os.clock()
+  for _, id in ipairs(ids) do
+    local entry = registry[id]
+    local seen = lastSeen[id]
+    common.say(("  %-14s %-6s computer %-4s %s"):format(
+      id, tostring(entry.kind), tostring(entry.computer),
+      seen and ("seen " .. math.floor(now - seen) .. "s ago") or "NEVER ANSWERED"))
+  end
+end
+
+function Master.dumpState()
+  common.say("-- state --")
+  common.say("  " .. (lockdown and ("LOCKED: " .. lockdown) or "running"))
+
+  local held = {}
+  for node, ticketId in pairs(locks.nodes) do
+    held[#held + 1] = node .. "(" .. ticketId .. ")"
+  end
+  table.sort(held)
+  common.say("  locks: " .. (#held > 0 and table.concat(held, " ") or "none"))
+
+  local any = false
+  for id, ticket in pairs(tickets) do
+    any = true
+    common.say(("  %s %s %s->%s leg %d/%d, %ds left"):format(
+      id, ticket.state, ticket.from, ticket.to, ticket.leg, #ticket.path,
+      math.floor(ticket.deadline - os.clock())))
+    common.say("    " .. Master.describePath(ticket.path))
+  end
+  if not any then common.say("  no tickets") end
+
+  common.say("  queue: " .. #queue)
+  common.say("  debug tracing: " .. (common.isDebug() and "ON" or "off"))
+end
+
+---@param key integer
+function Master.onKey(key)
+  if key == keys.t then
+    Master.dumpTopology()
+
+  elseif key == keys.r then
+    Master.dumpRegistry()
+
+  elseif key == keys.s then
+    Master.dumpState()
+
+  elseif key == keys.d then
+    common.setDebug(not common.isDebug())
+    settings.set("hypertube.debug", common.isDebug())
+    settings.save()
+    common.say("tracing " .. (common.isDebug() and "ON" or "off"))
+
+  elseif key == keys.a then
+    common.say("audit: forcing a round")
+    Master.beginAudit()
+
+  elseif key == keys.f then
+    -- The registry is only a cache of what each computer knows about itself,
+    -- so throwing it away costs nothing but a few seconds of re-announcing.
+    -- It is the way out of a map built from stale answers.
+    registry = {}
+    lastSeen = {}
+    peers = {}
+    saveRegistry()
+    Master.refreshTopology()
+    common.say("registry cleared; rebooting the panels will refill it")
+    rednet.broadcast({ cmd = "discover" }, common.PROTOCOL)
+
+  elseif key == keys.h then
+    common.say("t map | r registered | s state | a audit now | d tracing | f forget all")
   end
 end
 
@@ -1033,9 +1199,13 @@ function Master.handleRequest(panelId, fromAP, toAP)
   local path, hops = Master.findPath(fromAP, toAP)
   if path == nil then
     Master.replyTo(panelId, "No route")
+    Master.explainRoute(fromAP, toAP)
     return nil
   end
   ---@cast hops integer
+
+  common.debug("route " .. fromAP .. " -> " .. toAP .. ": "
+    .. Master.describePath(path))
 
   nextTicketId = nextTicketId + 1
   local ticketId = "T" .. nextTicketId
@@ -1147,6 +1317,8 @@ end
 ---@param senderId number
 ---@param msg      table
 function Master.onMessage(senderId, msg)
+  common.trace("<-", senderId, msg)
+
   if msg.cmd == "hello" then
     if msg.role == "panel" and type(msg.node) == "string" then
       Master.register(msg.node, {
@@ -1224,6 +1396,7 @@ function Master.main(cfg)
   rednet.host(common.PROTOCOL, common.hostname("master"))
 
   Master.log("master online, frequency " .. tostring(cfg and cfg.frequency))
+  common.say("press h for what the keys do")
 
   -- No discover broadcast here: the first audit sends one a second from now,
   -- and doing both made every panel and controller announce itself twice.
@@ -1258,6 +1431,9 @@ function Master.main(cfg)
       if type(b) == "table" and type(b.cmd) == "string" then
         Master.onMessage(a, b)
       end
+
+    elseif event == "key" then
+      Master.onKey(a)
 
     elseif event == "timer" then
       if a == timers.watchdog then

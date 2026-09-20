@@ -72,7 +72,19 @@ end
 -- Scope every message to this network before anything opens a modem.
 common.useFrequency(cfg.frequency)
 
+-- Tracing is per computer and survives a reboot, so a machine can be left
+-- logging overnight:  set hypertube.debug true
+settings.define("hypertube.debug", {
+  description = "Log every hypertube message to " .. common.LOG_FILE,
+  type = "boolean",
+  default = false,
+})
+common.setDebug(settings.get("hypertube.debug"))
+
 print("Hypertube " .. cfg.role .. " on frequency " .. cfg.frequency)
+if common.isDebug() then
+  print("tracing ON -> " .. common.LOG_FILE)
+end
 
 -- pcall so a config mistake prints a readable line on the computer's own
 -- screen instead of dumping a stack trace nobody is standing next to.

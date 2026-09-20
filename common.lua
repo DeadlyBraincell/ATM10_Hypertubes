@@ -234,8 +234,10 @@ end
 ---@param message table
 function MasterLink:send(message)
   if self.id ~= nil then
+    M.trace("->", self.id, message)
     rednet.send(self.id, message, M.PROTOCOL)
   else
+    M.trace("->", "broadcast", message)
     rednet.broadcast(message, M.PROTOCOL)
   end
 end
@@ -289,6 +291,107 @@ end
 function M.linkKey(nodeA, nodeB)
   if nodeA < nodeB then return nodeA .. "~" .. nodeB end
   return nodeB .. "~" .. nodeA
+end
+
+
+-- ===========================================================================
+-- 8. DIAGNOSTICS
+-- ===========================================================================
+--  Three computers, no shared screen, and a bug that only happens when they
+--  talk to each other. So everything worth knowing goes to a file as well as
+--  the screen, and the file can be read afterwards from anywhere:
+--
+--      edit /hypertube.log
+--
+--  Tracing every message is off by default, because it is far too loud to
+--  read while anything is actually happening. Turn it on per computer:
+--
+--      set hypertube.debug true
+--
+--  It survives a reboot, so a machine can be left tracing overnight.
+
+M.LOG_FILE  = "/hypertube.log"
+M.LOG_LIMIT = 48 * 1024   -- bytes; the log is cleared rather than allowed to fill the disk
+
+local debugOn = false
+
+---@param on boolean|nil
+function M.setDebug(on)
+  debugOn = on == true
+end
+
+---@return boolean
+function M.isDebug()
+  return debugOn
+end
+
+---In-game time, which is the same number on every computer in the world and
+---so can be used to line two logs up against each other.
+---@return string
+local function stamp()
+  local ok, clock = pcall(textutils.formatTime, os.time(), true)
+  if ok then return clock end
+  return ("%.1f"):format(os.clock())
+end
+
+---@param line string
+local function toFile(line)
+  if fs.exists(M.LOG_FILE) and fs.getSize(M.LOG_FILE) > M.LOG_LIMIT then
+    fs.delete(M.LOG_FILE)
+  end
+
+  local file = fs.open(M.LOG_FILE, "a")
+  if file == nil then return end
+  file.writeLine(line)
+  file.close()
+end
+
+---Something worth keeping: screen and file, always.
+---@param text string
+function M.say(text)
+  local line = stamp() .. " " .. text
+  print(line)
+  toFile(line)
+end
+
+---Detail. Silent unless this computer is in debug mode, because it is far too
+---much to read otherwise -- and it writes a file per line, which is slow
+---enough to matter if it were left on everywhere.
+---@param text string
+function M.debug(text)
+  if not debugOn then return end
+  local line = stamp() .. " . " .. text
+  print(line)
+  toFile(line)
+end
+
+---One line describing a table, without unrolling the whole thing: a config
+---dumped in full would bury the field that actually matters.
+---@param value any
+---@return string
+function M.describe(value)
+  if type(value) ~= "table" then return tostring(value) end
+
+  local parts = {}
+  for key, item in pairs(value) do
+    if type(item) == "table" then
+      parts[#parts + 1] = tostring(key) .. "={..}"
+    else
+      parts[#parts + 1] = tostring(key) .. "=" .. tostring(item)
+    end
+  end
+  table.sort(parts)
+  return "{" .. table.concat(parts, " ") .. "}"
+end
+
+---Every message in or out. This is the one that finds protocol bugs: which
+---side stopped talking, and what it last said.
+---@param direction "<-"|"->"
+---@param who       number|string
+---@param message   table
+function M.trace(direction, who, message)
+  if not debugOn then return end
+  M.debug(direction .. " " .. tostring(who) .. " " .. M.describe(message))
 end
 
 return M
