@@ -999,10 +999,16 @@ end
 ---@param apNode NodeId
 function Master.onEnter(apNode)
   local ticketId = locks.nodes[apNode]
-  if ticketId == nil then return end
+  if ticketId == nil then
+    common.debug("enter at " .. apNode .. ": no ticket holds it, ignoring")
+    return
+  end
 
   local ticket = tickets[ticketId]
   if ticket == nil then return end
+
+  common.debug("enter at " .. apNode .. ": ticket " .. ticketId .. " is "
+    .. ticket.state .. " " .. ticket.from .. " -> " .. ticket.to)
 
   if ticket.from == apNode and ticket.state == "boarding" then
     ticket.state = "transit"
@@ -1138,6 +1144,18 @@ function Master.tickWatchdog()
         reason = "junctions did not respond"
       elseif ticket.state == "boarding" then
         reason = "nobody boarded"
+      else
+        -- Name whoever was supposed to speak up next. A player really leaving
+        -- the tube and a scanner that never reports look identical from here,
+        -- and the difference is the whole bug: if the same node is named every
+        -- single time, it is the scanner, not the player.
+        for i = ticket.leg + 1, #ticket.path do
+          local waitingOn = ticket.path[i].to
+          if Master.canReport(waitingOn) then
+            reason = "no report from " .. waitingOn
+            break
+          end
+        end
       end
       expired[#expired + 1] = { id = id, reason = reason }
     end
@@ -1358,10 +1376,22 @@ function Master.onMessage(senderId, msg)
     end
 
   elseif msg.cmd == "enter" then
-    if peers[msg.node] == senderId then Master.onEnter(msg.node) end
+    if peers[msg.node] == senderId then
+      Master.onEnter(msg.node)
+    else
+      -- A report the master throws away is worth a word: silently dropping it
+      -- looks exactly like the panel never having sent it.
+      common.say("enter from " .. tostring(msg.node) .. " ignored: computer "
+        .. senderId .. " is not its registered panel (" .. tostring(peers[msg.node]) .. ")")
+    end
 
   elseif msg.cmd == "detect" then
-    if peers[msg.node] == senderId then Master.onDetect(msg.node) end
+    if peers[msg.node] == senderId then
+      Master.onDetect(msg.node)
+    else
+      common.say("detect from " .. tostring(msg.node) .. " ignored: computer "
+        .. senderId .. " is not its registered controller")
+    end
 
   elseif msg.cmd == "pong" then
     -- an audit answer: a panel speaks for itself, a controller for every
