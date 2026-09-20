@@ -20,13 +20,25 @@ local Master = {}
 
 
 -- ===========================================================================
--- 1. TOPOLOGY  (the only config this computer needs)
+-- 1. TOPOLOGY  (the only thing this computer has to be told)
 -- ===========================================================================
---  No redstone and no computer ids here. How a junction is physically wired is
---  the node controller's business; which computer runs it is learned at boot.
+--  Lives in /topology.lua, NOT in this file. The installer overwrites every
+--  program it manages, and the topology is the one piece of configuration
+--  that is laborious to retype, so it is kept where nothing will overwrite it
+--  -- next to the registry and the per-computer config.
+--
+--  It holds no redstone and no computer ids. How a junction is wired is the
+--  node controller's business, and which computer runs it is learned at boot.
+
+local TOPOLOGY_FILE = "/topology.lua"
 
 ---@type table<NodeId, Node>
 NODES = {}
+
+---Set when the topology is missing or broken. Unlike an unreachable node this
+---never resolves on its own, so it holds the lockdown down until a reboot.
+---@type string|nil
+local topologyError = nil
 
 -- Release nodes and links behind the pod as its scanners confirm it has passed.
 -- Roughly doubles throughput, but needs a scanner on every junction: a stretch
@@ -214,14 +226,214 @@ function Master.register(nodeId, entry)
   Master.registerPeer(nodeId, entry.computer)
   Master.sawNode(nodeId)
 
-  if NODES[nodeId] == nil then
-    Master.log("WARNING: " .. nodeId .. " registered but is not in the topology")
-  end
-
+  -- Both of these only fire on a real change. A panel re-announces itself
+  -- every few seconds until it is answered, and logging that each time buries
+  -- everything else.
   if changed then
     Master.log(nodeId .. " registered as computer " .. entry.computer)
+    if NODES[nodeId] == nil then
+      Master.log("  WARNING: " .. nodeId .. " is not in " .. TOPOLOGY_FILE)
+    end
     saveRegistry()
   end
+end
+
+
+-- ===========================================================================
+-- 3bb. TOPOLOGY FILE
+-- ===========================================================================
+
+local TOPOLOGY_TEMPLATE = [==[
+--[[ =========================================================================
+  topology.lua -- the shape of this hypertube network
+  -------------------------------------------------------------------------
+  Edit this file, then reboot the master.  edit /topology.lua
+
+  No program ever overwrites this file, including the installer.
+
+  One entry per node. Two kinds:
+
+    kind = "access"    an endpoint with a panel. Exactly one link.
+    kind = "junction"  a fork. Up to three links.
+
+  Every link must be written from BOTH ends. `to` is the neighbour, `port` is
+  the port the tube arrives at on that neighbour, and `cost` is roughly how
+  many seconds the trip takes -- it is what the router compares, and what the
+  per-leg timeouts are based on, so a rough measurement is fine but a wild
+  guess is not.
+
+  The port names are yours to choose; they only have to match what the node
+  controller was told during its setup. Compass directions are the obvious
+  choice for a junction, since that is how you describe it when you are
+  standing in front of it.
+========================================================================= ]]
+
+return {
+  ["AP_base"] = {
+    kind      = "access",
+    label     = "Main Base",
+    entryPort = "south",
+    links = {
+      south = { to = "J_hub", port = "north", cost = 24 },
+    },
+  },
+
+  ["J_hub"] = {
+    kind = "junction",
+    links = {
+      north = { to = "AP_base",   port = "south", cost = 24 },
+      south = { to = "AP_nether", port = "north", cost = 18 },
+      east  = { to = "AP_mine",   port = "west",  cost = 60 },
+    },
+  },
+
+  ["AP_nether"] = {
+    kind      = "access",
+    label     = "Nether Portal",
+    entryPort = "north",
+    links = {
+      north = { to = "J_hub", port = "south", cost = 18 },
+    },
+  },
+
+  ["AP_mine"] = {
+    kind      = "access",
+    label     = "Deep Mine",
+    entryPort = "west",
+    links = {
+      west = { to = "J_hub", port = "east", cost = 60 },
+    },
+  },
+}
+]==]
+
+---Check a hand-edited topology and report everything wrong with it at once,
+---rather than one reboot per mistake.
+---@param nodes table
+---@return string[] problems
+local function validateTopology(nodes)
+  local problems = {}
+
+  local function complain(text)
+    problems[#problems + 1] = text
+  end
+
+  for nodeId, node in pairs(nodes) do
+    if type(node) ~= "table" then
+      complain(nodeId .. " is not a table")
+
+    else
+      if node.kind ~= "access" and node.kind ~= "junction" then
+        complain(nodeId .. ": kind must be \"access\" or \"junction\"")
+      end
+      if type(node.links) ~= "table" or next(node.links) == nil then
+        complain(nodeId .. " has no links")
+
+      else
+        local count = 0
+        for port, link in pairs(node.links) do
+          count = count + 1
+
+          if type(link) ~= "table" or type(link.to) ~= "string" then
+            complain(nodeId .. "." .. tostring(port) .. " has no 'to'")
+
+          else
+            local other = nodes[link.to]
+            if other == nil then
+              complain(nodeId .. "." .. port .. " points at " .. link.to
+                .. ", which is not in this file")
+
+            else
+              if type(link.cost) ~= "number" or link.cost <= 0 then
+                complain(nodeId .. "." .. port .. " needs a cost in seconds")
+              end
+
+              -- A link has to exist from both ends, and the two halves have to
+              -- agree, or a route will be built that the junctions cannot make.
+              local back = nil
+              if type(link.port) == "string" and type(other.links) == "table" then
+                back = other.links[link.port]
+              end
+
+              if type(link.port) ~= "string" then
+                complain(nodeId .. "." .. port .. " has no 'port' on " .. link.to)
+              elseif type(back) ~= "table" then
+                complain(link.to .. " has no link on port " .. link.port
+                  .. " back to " .. nodeId)
+              elseif back.to ~= nodeId then
+                complain(link.to .. "." .. link.port .. " points at "
+                  .. tostring(back.to) .. ", not back at " .. nodeId)
+              elseif back.port ~= port then
+                complain(nodeId .. "." .. port .. " and " .. link.to .. "."
+                  .. link.port .. " disagree about which port they meet at")
+              elseif back.cost ~= link.cost then
+                complain(nodeId .. " <-> " .. link.to
+                  .. " has a different cost in each direction")
+              end
+            end
+          end
+        end
+
+        if node.kind == "junction" and count > 3 then
+          complain(nodeId .. " has " .. count .. " links; a junction has at most 3")
+        end
+        if node.kind == "access" and count ~= 1 then
+          complain(nodeId .. " has " .. count .. " links; an access point has 1")
+        end
+      end
+    end
+  end
+
+  table.sort(problems)
+  return problems
+end
+
+---Read /topology.lua. Writes a worked example on the very first boot, so the
+---answer to "what goes in it?" is a file you can edit rather than a manual.
+---@return boolean ok
+---@return string|nil err
+function Master.loadTopology()
+  if not fs.exists(TOPOLOGY_FILE) then
+    local file = fs.open(TOPOLOGY_FILE, "w")
+    if file ~= nil then
+      file.write(TOPOLOGY_TEMPLATE)
+      file.close()
+      return false, "no topology yet -- an example was written to " .. TOPOLOGY_FILE
+    end
+    return false, "no topology, and " .. TOPOLOGY_FILE .. " could not be written"
+  end
+
+  local chunk, syntaxError = loadfile(TOPOLOGY_FILE)
+  if chunk == nil then
+    return false, TOPOLOGY_FILE .. ": " .. tostring(syntaxError)
+  end
+
+  local ok, result = pcall(chunk)
+  if not ok then
+    return false, TOPOLOGY_FILE .. ": " .. tostring(result)
+  end
+  if type(result) ~= "table" or next(result) == nil then
+    return false, TOPOLOGY_FILE .. " did not return any nodes"
+  end
+
+  local problems = validateTopology(result)
+  if #problems > 0 then
+    Master.log(TOPOLOGY_FILE .. " has " .. #problems .. " problem(s):")
+    for _, problem in ipairs(problems) do Master.log("  " .. problem) end
+    return false, "topology has " .. #problems .. " problem(s); see the master"
+  end
+
+  NODES = result
+
+  local accessPoints, junctions = 0, 0
+  for _, node in pairs(NODES) do
+    if node.kind == "access" then accessPoints = accessPoints + 1 end
+    if node.kind == "junction" then junctions = junctions + 1 end
+  end
+  Master.log("topology: " .. accessPoints .. " access points, "
+    .. junctions .. " junctions")
+
+  return true, nil
 end
 
 
@@ -268,6 +480,14 @@ end
 function Master.clearLockdown()
   if lockdown == nil then return end
 
+  -- A missing node can come back on its own. A missing topology cannot, and an
+  -- empty one would otherwise pass every audit trivially -- nothing to check --
+  -- and open a network that cannot route anywhere.
+  if topologyError ~= nil then
+    lockdown = topologyError
+    return
+  end
+
   Master.log("lockdown lifted: the whole network answered")
   lockdown = nil
   Master.broadcastDestinations()
@@ -277,7 +497,12 @@ end
 ---Ask everything to prove it is alive. Non-blocking: the answers arrive as
 ---ordinary messages and finishAudit passes judgement when the timer fires.
 function Master.beginAudit()
-  if AUDIT_INTERVAL <= 0 then return end
+  -- The discover goes out either way: it is also how a panel that booted
+  -- before this master finds us at all.
+  if AUDIT_INTERVAL <= 0 then
+    rednet.broadcast({ cmd = "discover" }, common.PROTOCOL)
+    return
+  end
   if audit ~= nil then return end   -- one round at a time
 
   auditRound = auditRound + 1
@@ -1006,10 +1231,17 @@ function Master.main(cfg)
   common.openModem("any")
   rednet.host(common.PROTOCOL, common.hostname("master"))
 
-  -- Ask everyone who they are. Panels and controllers also announce themselves
-  -- on their own boot, so the two startup orders both work.
-  rednet.broadcast({ cmd = "discover" }, common.PROTOCOL)
   Master.log("master online, frequency " .. tostring(cfg and cfg.frequency))
+
+  -- No discover broadcast here: the first audit sends one a second from now,
+  -- and doing both made every panel and controller announce itself twice.
+
+  local ok, err = Master.loadTopology()
+  if not ok then
+    topologyError = tostring(err)
+    Master.log("NO TOPOLOGY: " .. topologyError)
+    Master.log("edit " .. TOPOLOGY_FILE .. " and reboot")
+  end
 
   -- Junctions are levels, so every controller has already put its own
   -- junctions straight on ITS boot: there is no stale switch state to undo.
@@ -1024,10 +1256,15 @@ function Master.main(cfg)
   -- what opens the network -- assuming everything is fine until told otherwise
   -- would dispatch routes into junctions nobody has heard from since the
   -- reboot.
-  if AUDIT_INTERVAL > 0 then
+  if topologyError ~= nil then
+    lockdown = topologyError
+  elseif AUDIT_INTERVAL > 0 then
     lockdown = "starting up"
-    timers.audit = os.startTimer(1)
   end
+
+  -- The audit runs even with AUDIT_INTERVAL at 0 if there is no topology,
+  -- because its discover broadcast is also how panels find us at all.
+  timers.audit = os.startTimer(1)
 
   while true do
     local event, a, b = os.pullEvent()
@@ -1050,7 +1287,9 @@ function Master.main(cfg)
 
       elseif a == timers.audit then
         Master.beginAudit()
-        timers.audit = os.startTimer(AUDIT_INTERVAL)
+        -- never rearm with 0: that is a busy loop, not a disabled audit
+        timers.audit = os.startTimer(
+          AUDIT_INTERVAL > 0 and AUDIT_INTERVAL or common.DISCOVER_INTERVAL)
 
       elseif a == timers.auditDeadline then
         Master.finishAudit()

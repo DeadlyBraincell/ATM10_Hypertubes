@@ -19,7 +19,7 @@
   fresh computer none of it exists yet.
 =========================================================================== ]]
 
-local DEFAULT_REPO = "https://raw.githubusercontent.com/DeadlyBraincell/Hypertube_Router/main/"
+local DEFAULT_REPO = "https://raw.githubusercontent.com/DeadlyBraincell/ATM10_Hypertubes/main/"
 
 -- Every computer gets these.
 local SHARED = { "common.lua", "config.lua", "startup.lua" }
@@ -218,8 +218,11 @@ settings.save()
 print("")
 print("Installed " .. #fetched .. " files as " .. role .. ".")
 
+-- Nothing below is ever fetched or deleted: /hypertube.cfg, /topology.lua and
+-- /hypertube_registry belong to the computer, not to the repository.
 if role == "master" then
-  print("Edit NODES in master.lua to describe the network, then reboot.")
+  print("Reboot. On first boot it writes /topology.lua for you to edit;")
+  print("that file is never overwritten by an install.")
 else
   print("Reboot to run the setup wizard.")
 end

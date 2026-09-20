@@ -148,6 +148,24 @@
 
 
   ---------------------------------------------------------------------------
+  WHAT LIVES WHERE
+  ---------------------------------------------------------------------------
+  The installer overwrites every program it manages, so nothing a person types
+  in may live inside one. Three files belong to the computer instead, and are
+  never fetched or deleted:
+
+    /hypertube.cfg       this computer's role, frequency and wiring, from the
+                         setup wizard
+    /topology.lua        MASTER ONLY: the shape of the network. Written as a
+                         worked example on first boot, then edited by hand.
+                         Checked at every boot -- both halves of every link
+                         must exist and agree, or the master says what is
+                         wrong and stays locked.
+    /hypertube_registry  MASTER ONLY: who registered as what, written the
+                         moment a registration arrives.
+
+
+  ---------------------------------------------------------------------------
   AUDIT AND LOCKDOWN
   ---------------------------------------------------------------------------
   Every registration is written to /hypertube_registry the moment it arrives,

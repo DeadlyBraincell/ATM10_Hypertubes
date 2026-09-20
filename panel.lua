@@ -189,6 +189,15 @@ function Panel.draw()
     return
   end
 
+  -- connected, but the master has nothing to offer -------------------------
+  if #destinations == 0 then
+    monitor.setBackgroundColor(COLORS.bg)
+    monitor.setTextColor(COLORS.busyText)
+    monitor.setCursorPos(2, math.max(2, math.floor(h / 2)))
+    monitor.write(known and "No other stations" or "Waiting for master...")
+    return
+  end
+
   -- destination grid ------------------------------------------------------
   local pages = math.max(1, math.ceil(#destinations / perPage))
   if page > pages then page = pages end
