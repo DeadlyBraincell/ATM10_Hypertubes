@@ -46,7 +46,7 @@ M.HOP_SECONDS = 30
 
 M.DISCOVER_INTERVAL = 15   -- master re-asks who is out there while peers are missing
 M.HELLO_INTERVAL    = 10   -- panels and controllers re-announce until answered
-M.DOOR_HOLD         = 8    -- seconds the destination doors stay open after arrival
+M.NOTICE_HOLD       = 8    -- seconds an arrival stays on the panel before it clears
 
 -- Rednet hostnames. Nothing routes by hostname any more -- every peer is
 -- learned from "hello" -- but hosting one is still worth it: it makes a
@@ -126,13 +126,13 @@ end
 ---Everything a panel needs to render itself. Sent by the master on every
 ---change, so the panel never has to work anything out on its own.
 ---@class PanelState
----@field cmd       string|nil   filled in by the master on the way out
----@field ticket    TicketId|nil
----@field state     TicketState|"idle"
----@field text      string
----@field doors     boolean
----@field light     "green"|"red"|"off"
----@field autoClose boolean|nil  panel closes the doors again after DOOR_HOLD
+---@field cmd        string|nil   filled in by the master on the way out
+---@field ticket     TicketId|nil
+---@field state      TicketState|"idle"
+---@field text       string
+---@field doors      boolean  power to the ENTRANCE: true only while boarding
+---@field light      "green"|"red"|"off"
+---@field clearAfter boolean|nil  panel clears this notice after NOTICE_HOLD
 
 ---@class Request
 ---@field panel number
@@ -156,6 +156,10 @@ end
 --                                                        and "arrived" at the
 --                                                        destination
 --  panel  -> master  { cmd = "hello",  role = "panel", node = NodeId }
+--
+--  `doors` is power to the ENTRANCE, and is true only while a traveller is
+--  meant to board. An entrance pulls people in, so it is never powered at the
+--  arriving end -- that would send them straight back.
 --
 --  master -> panel   { cmd = "destinations", nodes = Destination[],
 --                      locked = string|nil }
@@ -265,6 +269,13 @@ end
 ---@param sides string[]
 ---@return fun(): string[]  sides that went low -> high since the last call
 function M.edgeDetector(sides)
+  -- Watching nothing is never what anyone meant, and it fails silently: the
+  -- detector simply reports no one, for ever. `{ config.missingField }` is an
+  -- empty table, so this is one typo away at all times.
+  if #sides == 0 then
+    error("edgeDetector was given no sides to watch", 2)
+  end
+
   local previous = {}
   for _, side in ipairs(sides) do previous[side] = redstone.getInput(side) end
 

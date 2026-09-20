@@ -5,8 +5,19 @@
 
     * the interface: a monitor listing every other access point, paged so the
       list survives growing past one screen, with busy destinations greyed out
-    * the access point itself: doors, status light, and the Tube Scanner
-      detector placed just inside the tube
+    * the access point itself: the entrance, the status light, and the scanner
+
+  THE ENTRANCE is powered only while somebody may board, and is off everywhere
+  else -- including at the far end of a route. An entrance pulls travellers in
+  rather than letting them out, so powering one at the moment somebody arrives
+  would send them straight back where they came from.
+
+  WHERE THE SCANNER GOES: on an ACCELERATOR just inside the tube, never on the
+  entrance block. An entrance only reports entities going IN, so a scanner
+  there reports boarding and stays silent on arrival -- and since the same
+  scanner serves both ends of every route, that station can be departed from
+  but never arrived at. Every route to it dies on its watchdog instead.
+  On an accelerator the scanner sees traffic in both directions.
 
   The panel decides nothing about routing. It sends "route A -> B" and then
   renders whatever state the master pushes back.
@@ -253,6 +264,9 @@ end
 -- 4. ACCESS POINT HARDWARE
 -- ===========================================================================
 
+---Power to the entrance. True means "you may board now"; the entrance is dead
+---at every other moment, which is what stops anyone wandering into a tube that
+---has not been switched for them.
 ---@param open boolean
 local function setDoors(open)
   redstone.setOutput(WIRING.doors, open)
@@ -307,14 +321,29 @@ function Panel.main(cfg)
   local VALID_SIDES = {
     top = true, bottom = true, left = true, right = true, front = true, back = true,
   }
-  local wired = { doors = WIRING.doors, detector = WIRING.detector }
-  for name, side in pairs(WIRING.lights or {}) do wired[name .. " lamp"] = side end
 
-  for what, side in pairs(wired) do
+  ---@param what string
+  ---@param side string|nil
+  local function mustBeASide(what, side)
     if not VALID_SIDES[side] then
       error(what .. " is set to '" .. tostring(side)
         .. "', which is not a side -- run: startup config", 0)
     end
+  end
+
+  -- Checked by name, one at a time. Walking a table of them with pairs() skips
+  -- any that are nil -- which is the one case worth catching, since a missing
+  -- detector side does not throw anywhere: it just makes the panel watch no
+  -- sides at all and silently never report a soul.
+  mustBeASide("the door output", WIRING.doors)
+  mustBeASide("the Tube Scanner input", WIRING.detector)
+  for colour, side in pairs(WIRING.lights or {}) do
+    mustBeASide("the " .. colour .. " lamp", side)
+  end
+
+  if WIRING.doors == WIRING.detector then
+    error("the doors and the scanner are both on " .. WIRING.doors
+      .. " -- run: startup config", 0)
   end
 
   common.openModem("any")
@@ -336,7 +365,7 @@ function Panel.main(cfg)
 
   local entered = common.edgeDetector({ WIRING.detector })
   local retry = os.startTimer(common.HELLO_INTERVAL)
-  local doorTimer = nil
+  local noticeTimer = nil
 
   while true do
     local event, a, b, c = os.pullEvent()
@@ -358,7 +387,13 @@ function Panel.main(cfg)
       -- The scanner sits just inside the entrance. At the origin a rising edge
       -- means the player is in the tube; at the destination the same detector
       -- reports the arrival. The master knows which end this is.
-      if #entered() > 0 then
+      local fired = #entered() > 0
+
+      common.debug("redstone: " .. WIRING.detector .. "="
+        .. tostring(redstone.getInput(WIRING.detector))
+        .. (fired and " -> rising edge, reporting" or " (no rising edge)"))
+
+      if fired then
         link:send({ cmd = "enter", node = MY_NODE })
       end
 
@@ -418,10 +453,10 @@ function Panel.main(cfg)
           setLights(msg.light or "off")
           Panel.draw()
 
-          -- Arrival opens these doors; nothing else would ever close them,
-          -- because the ticket stops existing the moment we are told.
-          if msg.autoClose then
-            doorTimer = os.startTimer(common.DOOR_HOLD)
+          -- An arrival notice has no ticket behind it any more, so nothing
+          -- else would ever take it down.
+          if msg.clearAfter then
+            noticeTimer = os.startTimer(common.NOTICE_HOLD)
           end
 
         elseif msg.cmd == "discover" then
@@ -431,11 +466,9 @@ function Panel.main(cfg)
       end
 
     elseif event == "timer" then
-      if a == doorTimer then
-        doorTimer = nil
-        setDoors(false)
+      if a == noticeTimer then
+        noticeTimer = nil
         setLights("off")
-        status.doors = false
         status.text = idleText()
         Panel.draw()
 

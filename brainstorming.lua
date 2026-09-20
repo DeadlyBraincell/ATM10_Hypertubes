@@ -89,10 +89,18 @@
   There is no ComputerCraft peripheral for hypertubes. Redstone is the whole
   interface, in both directions, through two tube attachments:
 
-    Tube Scanner            only fits on a JUNCTION, never part way along a
-                            tube, and reports the junction as a whole: a ONE
-                            SECOND pulse saying something went through, with
-                            no way to tell which branch it took.
+    Tube Scanner            fits on a JUNCTION or an ACCELERATOR, not on a
+                            plain length of tube, and reports a ONE SECOND
+                            pulse saying something went through -- with no way
+                            to tell which way it was headed.
+
+                            WHERE IT IS MATTERS. On an ENTRANCE it only fires
+                            for entities going IN. Since one scanner serves
+                            both ends of every route at an access point, a
+                            station wired that way can be departed from and
+                            never arrived at: every route to it dies on its
+                            watchdog instead. Put it on an accelerator just
+                            inside the tube, which sees both directions.
 
                             One second is comfortably long, so the rising edge
                             is never missed. But two travellers less than a

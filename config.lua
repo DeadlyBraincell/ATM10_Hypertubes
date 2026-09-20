@@ -287,9 +287,17 @@ local function panelWizard(cfg, existing)
 
   print("")
   print("-- wiring (sides of THIS computer) --")
+  print("   the entrance output is powered only while somebody may board, so")
+  print("   an unpowered entrance is a station nobody can walk into.")
+  print("   the Tube Scanner must sit on an ACCELERATOR just inside the tube,")
+  print("   not on the entrance: an entrance only reports entities going IN,")
+  print("   so a station wired that way never notices anyone arriving.")
   print("   lamps are optional: blank keeps the default, '-' for none")
   cfg.wiring = {
-    doors    = askSide("Door output side", wiring.doors or "right"),
+    -- Still called `doors` on the wire and in the saved config, so that
+    -- existing stations keep working. What it drives is the entrance itself:
+    -- powered while somebody may board, off the rest of the time.
+    doors    = askSide("Entrance power output side", wiring.doors or "right"),
     detector = askSide("Tube Scanner input side", wiring.detector or "back"),
     lights   = {
       green = askOptionalSide("Green lamp side", lights.green),

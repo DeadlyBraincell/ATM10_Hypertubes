@@ -21,12 +21,14 @@
       ports can need different levels depending on which way they travelled.
     * Setting one is idempotent -- re-asserting the same level is free -- and
       boot can put every junction into a known state by dropping its line.
-    * A Tube Scanner can only sit at a JUNCTION, not part way along a tube,
-      and it reports the junction as a whole: a one second pulse saying
-      something went through, with no way to tell which branch it took or
-      which one it came from. All the master gets is "a pod reached J_hub".
+    * A Tube Scanner fits on a JUNCTION or an accelerator, not on a plain
+      length of tube, and reports the junction as a whole: a one second pulse
+      saying something went through, with no way to tell which branch it took
+      or which one it came from. All the master gets is "a pod reached J_hub".
       That is still enough to follow a route, because the path already says
       which junctions a pod should reach and in what order.
+      (Access points have the opposite problem -- see panel.lua. A scanner on
+      an ENTRANCE only fires for entities going in.)
     * One second is long enough that the rising edge is never missed, but two
       travellers less than a second apart merge into a single report.
 

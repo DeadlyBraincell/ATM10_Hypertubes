@@ -1104,16 +1104,20 @@ end
 
 ---@param ticket Ticket
 function Master.onArrival(ticket)
-  -- autoClose: the panel shuts its own doors again after DOOR_HOLD seconds.
-  -- Without it the destination would stay open and green forever, since the
-  -- ticket is about to stop existing.
+  -- The entrance stays OFF here. It is not a door to be let out through -- it
+  -- is the thing that pulls travellers in, and powering it at the moment
+  -- somebody arrives would take them straight back where they came from.
+  --
+  -- clearAfter only tidies up the notice: the lamp and the "Arrived" line
+  -- would otherwise sit there for ever, because the ticket that put them
+  -- there is about to stop existing.
   Master.tellPanel(ticket.to, {
-    ticket    = ticket.id,
-    state     = "idle",
-    text      = "Arrived",
-    doors     = true,
-    light     = "green",
-    autoClose = true,
+    ticket     = ticket.id,
+    state      = "idle",
+    text       = "Arrived",
+    doors      = false,
+    light      = "green",
+    clearAfter = true,
   })
   Master.releasePath(ticket.id, "arrived")
 end
