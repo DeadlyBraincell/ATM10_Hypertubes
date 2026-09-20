@@ -158,7 +158,7 @@ local function ask(label, default)
 
     if answer ~= nil and answer ~= "" then return answer end
     if default ~= nil then return default end
-    print("  this one is required")
+    print("This one is required.")
   end
 end
 
@@ -189,7 +189,7 @@ local function askFrom(label, choices, default)
   while true do
     local answer = ask(label .. " (" .. table.concat(choices, "/") .. ")", default)
     if allowed[answer] then return answer end
-    print("  pick one of: " .. table.concat(choices, ", "))
+    print("Pick one of: " .. table.concat(choices, ", "))
   end
 end
 
@@ -210,7 +210,7 @@ local function askOptionalSide(label, default)
     for _, side in ipairs(SIDES) do
       if answer == side then return answer end
     end
-    print("  pick one of: " .. table.concat(SIDES, ", ") .. ", or blank for none")
+    print("Pick one of: " .. table.concat(SIDES, ", ") .. ". Blank for none.")
   end
 end
 
@@ -221,7 +221,7 @@ local function askNumber(label, default)
   while true do
     local answer = tonumber(ask(label, default and tostring(default) or nil))
     if answer ~= nil then return answer end
-    print("  numbers only")
+    print("Numbers only.")
   end
 end
 
@@ -256,7 +256,7 @@ local function askPort(label, taken, default, optional)
 
     -- Two tubes to the same node would be the same port name, and a junction
     -- cannot route between two ports it cannot tell apart.
-    print("  a tube to " .. answer .. " is already on this junction")
+    print("A tube to " .. answer .. " is already on this junction.")
   end
 end
 
@@ -277,8 +277,7 @@ local function panelWizard(cfg, existing)
   -- The master builds the map of the network out of these answers, so this is
   -- the one question that describes the world rather than this computer.
   print("")
-  print("   follow this station's tube: the first junction or station it")
-  print("   reaches is its neighbour. Use that computer's node id.")
+  print("Follow this station's tube: the first junction or station it reaches is its neighbour. Give that computer's node id, not the far end of the line.")
   cfg.neighbour = ask("Node at the other end of the tube",
     existing and existing.neighbour)
 
@@ -287,12 +286,10 @@ local function panelWizard(cfg, existing)
 
   print("")
   print("-- wiring (sides of THIS computer) --")
-  print("   the entrance output is powered only while somebody may board, so")
-  print("   an unpowered entrance is a station nobody can walk into.")
-  print("   the Tube Scanner must sit on an ACCELERATOR just inside the tube,")
-  print("   not on the entrance: an entrance only reports entities going IN,")
-  print("   so a station wired that way never notices anyone arriving.")
-  print("   lamps are optional: blank keeps the default, '-' for none")
+  print("The entrance output is powered only while somebody may board.")
+  print("")
+  print("The Tube Scanner must sit on an ACCELERATOR just inside the tube, never on the entrance. An entrance only reports entities going IN, so a station wired that way never notices anyone arriving.")
+  print("")
   cfg.wiring = {
     -- Still called `doors` on the wire and in the saved config, so that
     -- existing stations keep working. What it drives is the entrance itself:
@@ -318,10 +315,8 @@ local function junctionWizard(nodeId, existing)
   -- where they go is one question, not two. It also means a junction cannot
   -- describe two tubes to the same place, which is a thing it could not route
   -- between anyway.
-  print("   name the node each of the three tubes leads to -- the next")
-  print("   junction or station on it, not the final destination.")
-
-  print("   leave one blank if that tube is not built yet")
+  print("Name the node each of the three tubes leads to: the next junction or station along it, not the final destination. Leave one blank if that tube is not built yet.")
+  print("")
 
   local side = askSide("Redstone output side", existing.side or "top")
 
@@ -339,7 +334,7 @@ local function junctionWizard(nodeId, existing)
   end
   if connected < 2 then
     print("")
-    print("   a junction needs at least two tubes to be worth anything.")
+    print("A junction needs at least two tubes connected to be worth anything. Starting again.")
     return junctionWizard(nodeId, existing)
   end
 
@@ -358,9 +353,8 @@ local function junctionWizard(nodeId, existing)
   for _, port in pairs({ a, b }) do straightEnds[#straightEnds + 1] = port end
 
   if branch ~= nil and #straightEnds > 0 then
-    print("   a pod entering from " .. branch .. " with the line OFF leaves to")
-    print("   its RIGHT. Which way is that?")
-    right = askFrom("  right-hand exit from " .. branch,
+    print("A pod entering from " .. branch .. " with the line OFF leaves to its RIGHT. Which way is that?")
+    right = askFrom("Right-hand exit from " .. branch,
       straightEnds, existing.right or straightEnds[1])
   end
 
@@ -368,9 +362,7 @@ local function junctionWizard(nodeId, existing)
   -- through, with no way to tell which branch. So there is nothing to ask
   -- beyond which side it is wired to.
   print("")
-  print("   a Tube Scanner here lets the master follow a pod past this")
-  print("   junction. Without one the route is still tracked, just from the")
-  print("   next junction that has one.")
+  print("A Tube Scanner here lets the master follow a pod past this junction. Without one the route is still tracked, just from the next junction that has one.")
   local scanner = askOptionalSide("Tube Scanner input side", existing.scanner)
 
   return {
@@ -451,7 +443,7 @@ function config.wizard(existing)
   while true do
     print("")
     print("=== Hypertube setup ===")
-    print("enter keeps the [default]; '-' clears an optional value")
+    print("Enter keeps the [default]. Type - to clear an optional value.")
     print("")
 
     local role = askFrom("Role of this computer", ROLES, existing and existing.role)
