@@ -10,7 +10,7 @@
 
   Assumptions
     * The network is a TREE: no cycles, so between two access points there is
-      exactly one path. The search is cost-based anyway, ready for loops.
+      exactly one path. The search counts nodes anyway, ready for loops.
     * Every node has AT MOST 3 links (hypertube T-junction).
     * A route locks every node and link it uses until the player arrives.
 
@@ -18,11 +18,14 @@
   ---------------------------------------------------------------------------
   ROLE 1 -- MASTER SERVER                                         master.lua
   ---------------------------------------------------------------------------
-  The only computer that knows the topology. Holds NODES (links + costs), the
+  The only computer that knows the topology. Holds NODES (links), the
   lock table, the ticket table and the queue. Never touches redstone: it asks
   panels to open doors and controllers to switch junctions.
 
-    * findPath      Dijkstra over link cost; on a tree it just walks the tree
+    * findPath      breadth-first: fewest nodes wins. Tubes carry no travel
+                    time, so there is nothing to weigh one against another,
+                    and every junction on a route is one more thing to switch,
+                    ack and wait on. On a tree it just walks the tree
     * claimPath     all-or-nothing lock over every node AND link on the path
     * applyRoute    fires one "set" per junction, each with a sequence number
     * watchdog      one deadline per ticket state, checked once a second
@@ -208,8 +211,11 @@
   ---------------------------------------------------------------------------
   OPEN QUESTIONS / NEXT STEPS
   ---------------------------------------------------------------------------
-  * Cost units: measure one straight run, store seconds-per-block, derive every
-    link cost from tube length.
+  * HOP_SECONDS is the one timing number left, and it is a blunt one: the
+    watchdog allows that long per hop crossed. It only has to be longer than
+    the longest tube in the network. If a genuine ETA is ever wanted, that is
+    when travel times would have to come back -- measured by a mapping run
+    rather than typed in by hand.
   * Persistence: write locks and tickets to disk on every change, so a server
     restart or chunk unload cannot strand a locked route.
   * An Advanced Peripherals player detector alongside the scanner would tell

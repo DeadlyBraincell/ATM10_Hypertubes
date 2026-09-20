@@ -6,7 +6,7 @@
   doors, and it tracks where every player currently is.
 
   Assumes a loop-free network, so between two access points there is exactly
-  one path. The search is cost-based anyway, ready for loops later.
+  one path. The search counts nodes anyway, ready for loops later.
 
   Nothing in this file blocks. Peers are learned from "hello" and cached; an
   unknown peer fails the send and re-triggers discovery, because a lookup here
@@ -256,11 +256,10 @@ local TOPOLOGY_TEMPLATE = [==[
     kind = "access"    an endpoint with a panel. Exactly one link.
     kind = "junction"  a fork. Up to three links.
 
-  Every link must be written from BOTH ends. `to` is the neighbour, `port` is
-  the port the tube arrives at on that neighbour, and `cost` is roughly how
-  many seconds the trip takes -- it is what the router compares, and what the
-  per-leg timeouts are based on, so a rough measurement is fine but a wild
-  guess is not.
+  Every link must be written from BOTH ends. `to` is the neighbour and `port`
+  is the port the tube arrives at on that neighbour. That is all: there are no
+  travel times to measure. Routes are chosen by fewest nodes, so a tube is a
+  tube however long it is.
 
   The port names are yours to choose; they only have to match what the node
   controller was told during its setup. Compass directions are the obvious
@@ -274,16 +273,16 @@ return {
     label     = "Main Base",
     entryPort = "south",
     links = {
-      south = { to = "J_hub", port = "north", cost = 24 },
+      south = { to = "J_hub", port = "north" },
     },
   },
 
   ["J_hub"] = {
     kind = "junction",
     links = {
-      north = { to = "AP_base",   port = "south", cost = 24 },
-      south = { to = "AP_nether", port = "north", cost = 18 },
-      east  = { to = "AP_mine",   port = "west",  cost = 60 },
+      north = { to = "AP_base",   port = "south" },
+      south = { to = "AP_nether", port = "north" },
+      east  = { to = "AP_mine",   port = "west" },
     },
   },
 
@@ -292,7 +291,7 @@ return {
     label     = "Nether Portal",
     entryPort = "north",
     links = {
-      north = { to = "J_hub", port = "south", cost = 18 },
+      north = { to = "J_hub", port = "south" },
     },
   },
 
@@ -301,7 +300,7 @@ return {
     label     = "Deep Mine",
     entryPort = "west",
     links = {
-      west = { to = "J_hub", port = "east", cost = 60 },
+      west = { to = "J_hub", port = "east" },
     },
   },
 }
@@ -344,10 +343,6 @@ local function validateTopology(nodes)
                 .. ", which is not in this file")
 
             else
-              if type(link.cost) ~= "number" or link.cost <= 0 then
-                complain(nodeId .. "." .. port .. " needs a cost in seconds")
-              end
-
               -- A link has to exist from both ends, and the two halves have to
               -- agree, or a route will be built that the junctions cannot make.
               local back = nil
@@ -366,9 +361,6 @@ local function validateTopology(nodes)
               elseif back.port ~= port then
                 complain(nodeId .. "." .. port .. " and " .. link.to .. "."
                   .. link.port .. " disagree about which port they meet at")
-              elseif back.cost ~= link.cost then
-                complain(nodeId .. " <-> " .. link.to
-                  .. " has a different cost in each direction")
               end
             end
           end
@@ -576,35 +568,36 @@ end
 -- 4. PATHFINDING
 -- ===========================================================================
 
----Dijkstra over link cost. While there are no loops this just walks the tree,
----but it is already the right algorithm for when loops get added.
+---Breadth-first search: the route through the fewest nodes wins.
+---
+---Tubes carry no travel time, so there is nothing to weigh one against
+---another. Counting nodes is both the honest measure and the useful one --
+---every junction is a thing that has to be switched, acked and waited on, so
+---the shortest route is also the one with the least that can go wrong.
+---
+---BFS visits in hop order, so the first time a node is reached is by a
+---shortest route and it never has to be reconsidered.
 ---@param startNode NodeId
 ---@param goalNode  NodeId
 ---@param avoid     Locks|nil  nodes/links to route around (no effect on a tree)
 ---@return Path|nil path  nil when there is no route
----@return number|string  total cost in seconds, or an error message
+---@return integer|string count  hops, or an error message
 function Master.findPath(startNode, goalNode, avoid)
   if NODES[startNode] == nil or NODES[goalNode] == nil then
     return nil, "unknown node"
   end
 
-  ---@type table<NodeId, number>
-  local dist = { [startNode] = 0 }
+  ---@type table<NodeId, integer>
+  local hops = { [startNode] = 0 }
   ---@type table<NodeId, PrevStep>
   local prev = {}
-  ---@type table<NodeId, boolean>
-  local open = { [startNode] = true }
 
-  while next(open) do
-    -- cheapest open node; a linear scan is fine at this network size,
-    -- swap in a binary heap if the net ever gets large
-    ---@type NodeId|nil
-    local current = nil
-    for node in pairs(open) do
-      if current == nil or dist[node] < dist[current] then current = node end
-    end
+  local queue = { startNode }
+  local head = 1
 
-    open[current] = nil
+  while head <= #queue do
+    local current = queue[head]
+    head = head + 1
     if current == goalNode then break end
 
     for port, link in pairs(NODES[current].links) do
@@ -612,24 +605,22 @@ function Master.findPath(startNode, goalNode, avoid)
       -- a link pointing at a node that is not in NODES would break the search
       if NODES[neighbour] == nil then
         Master.log("config error: " .. current .. " links to unknown " .. neighbour)
-      else
+
+      elseif hops[neighbour] == nil then
         local blocked = avoid ~= nil
           and (avoid.nodes[neighbour] ~= nil
             or avoid.links[common.linkKey(current, neighbour)] ~= nil)
 
         if not blocked then
-          local newDist = dist[current] + link.cost
-          if newDist < (dist[neighbour] or math.huge) then
-            dist[neighbour] = newDist
-            prev[neighbour] = { from = current, outPort = port, inPort = link.port }
-            open[neighbour] = true
-          end
+          hops[neighbour] = hops[current] + 1
+          prev[neighbour] = { from = current, outPort = port, inPort = link.port }
+          queue[#queue + 1] = neighbour
         end
       end
     end
   end
 
-  if dist[goalNode] == nil then return nil, "no route" end
+  if hops[goalNode] == nil then return nil, "no route" end
 
   -- Rebuild as a list of HOPS: setting a junction needs both the port the pod
   -- arrives on and the port it leaves by.
@@ -647,7 +638,7 @@ function Master.findPath(startNode, goalNode, avoid)
     node = step.from
   end
 
-  return path, dist[goalNode]
+  return path, hops[goalNode]
 end
 
 
@@ -833,7 +824,10 @@ function Master.beginBoarding(ticket)
   Master.tellPanel(ticket.from, {
     ticket = ticket.id,
     state  = "boarding",
-    text   = "Route open, ETA " .. math.floor(ticket.eta) .. "s",
+    -- No ETA: nothing in the topology says how long a tube takes, and a
+    -- number made up from a hop count would be worse than no number.
+    text   = "Route open, " .. ticket.hops .. " stop"
+      .. (ticket.hops == 1 and "" or "s"),
     doors  = true,
     light  = "green",
   })
@@ -892,22 +886,26 @@ end
 ---past the silent ones to the next node that can speak up -- the next fitted
 ---junction, or the destination panel.
 ---
+---With no travel times in the topology the budget is simply HOP_SECONDS per
+---hop crossed. That is a blunt instrument, and deliberately so: its only job
+---is to notice a player who has left the system, and being late about that
+---costs a little throughput, while being early strands somebody who was
+---merely on a long tube.
+---
 ---An unregistered controller reports nothing, which lands on the lenient side:
 ---the deadline simply reaches further ahead.
 ---@param ticket Ticket
 ---@return number
 function Master.legDeadline(ticket)
-  local total = 0
+  local crossed = 0
 
   for i = ticket.leg + 1, #ticket.path do
-    local hop = ticket.path[i]
-    -- the cost lives on the link, not on the hop
-    total = total + NODES[hop.from].links[hop.outPort].cost
-    if Master.canReport(hop.to) then break end
+    crossed = crossed + 1
+    if Master.canReport(ticket.path[i].to) then break end
   end
 
-  if total == 0 then return os.clock() + common.GRACE end
-  return os.clock() + total * common.SAFETY_FACTOR + common.GRACE
+  if crossed == 0 then return os.clock() + common.GRACE end
+  return os.clock() + crossed * common.HOP_SECONDS + common.GRACE
 end
 
 ---A control detector along the tubes saw the pod pass.
@@ -1038,12 +1036,12 @@ function Master.handleRequest(panelId, fromAP, toAP)
   end
   if fromAP == toAP then return nil end
 
-  local path, cost = Master.findPath(fromAP, toAP)
+  local path, hops = Master.findPath(fromAP, toAP)
   if path == nil then
     Master.replyTo(panelId, "No route")
     return nil
   end
-  ---@cast cost number
+  ---@cast hops integer
 
   nextTicketId = nextTicketId + 1
   local ticketId = "T" .. nextTicketId
@@ -1071,7 +1069,7 @@ function Master.handleRequest(panelId, fromAP, toAP)
     deadline = os.clock() + common.ACK_TIMEOUT,
     leg      = 0,
     pending  = {},
-    eta      = cost,
+    hops     = hops,
   }
   tickets[ticketId] = ticket
 

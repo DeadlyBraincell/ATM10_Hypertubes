@@ -34,9 +34,15 @@ end
 
 M.ACK_TIMEOUT      = 2     -- seconds a junction has to confirm a switch
 M.BOARDING_TIMEOUT = 30    -- seconds the player has to enter the tube
-M.SAFETY_FACTOR    = 2.0   -- per-leg deadline = cost * SAFETY_FACTOR + GRACE
 M.GRACE            = 5     -- seconds
 M.TICK             = 1     -- watchdog interval
+
+-- Routes are measured in hops, not seconds, so the watchdog needs one number
+-- for how long a hop may take. Make it generous: it is an upper bound on the
+-- longest tube in the network, not an average, and its only job is to notice a
+-- player who is no longer in the system. Too small and a long tube looks like
+-- a lost player.
+M.HOP_SECONDS = 30
 
 M.DISCOVER_INTERVAL = 15   -- master re-asks who is out there while peers are missing
 M.HELLO_INTERVAL    = 10   -- panels and controllers re-announce until answered
@@ -76,7 +82,6 @@ end
 ---@class Link
 ---@field to   NodeId  neighbour node
 ---@field port PortId  the port on `to` that this link arrives at
----@field cost number  travel time in seconds
 
 ---@class Node
 ---@field kind      NodeKind
@@ -111,7 +116,7 @@ end
 ---@field deadline number         os.clock() value; missing it fails the ticket
 ---@field leg      integer        hops confirmed so far, 0 = still at origin
 ---@field pending  table<NodeId, integer>  junctions that have not acked yet
----@field eta      number         total cost in seconds
+---@field hops     integer        length of the route, in nodes stepped through
 
 ---@class Destination
 ---@field id    NodeId
