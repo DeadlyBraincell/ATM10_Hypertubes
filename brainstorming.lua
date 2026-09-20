@@ -159,13 +159,17 @@
 
     /hypertube.cfg       this computer's role, frequency and wiring, from the
                          setup wizard
-    /topology.lua        MASTER ONLY: the shape of the network. Written as a
-                         worked example on first boot, then edited by hand.
-                         Checked at every boot -- both halves of every link
-                         must exist and agree, or the master says what is
-                         wrong and stays locked.
     /hypertube_registry  MASTER ONLY: who registered as what, written the
-                         moment a registration arrives.
+                         moment a registration arrives. The map of the network
+                         is rebuilt from this, never typed in.
+
+  There is no topology file. Each computer is asked one question about the
+  world -- what is at the other end of each of its tubes -- and the master
+  pairs up the two ends that name each other. The answer comes from the
+  computer standing next to the tube, so it is corrected by whoever rebuilds
+  that junction, at the moment they rebuild it, and there is no second copy to
+  fall out of date. Until every named neighbour has registered and agreed, the
+  map is incomplete and the network stays locked, naming what is missing.
 
 
   ---------------------------------------------------------------------------

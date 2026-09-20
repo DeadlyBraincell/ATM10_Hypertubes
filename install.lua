@@ -218,11 +218,11 @@ settings.save()
 print("")
 print("Installed " .. #fetched .. " files as " .. role .. ".")
 
--- Nothing below is ever fetched or deleted: /hypertube.cfg, /topology.lua and
+-- Nothing below is ever fetched or deleted: /hypertube.cfg and
 -- /hypertube_registry belong to the computer, not to the repository.
 if role == "master" then
-  print("Reboot. On first boot it writes /topology.lua for you to edit;")
-  print("that file is never overwritten by an install.")
+  print("Reboot. It has nothing to configure -- the map of the network")
+  print("assembles itself as the panels and controllers register.")
 else
   print("Reboot to run the setup wizard.")
 end

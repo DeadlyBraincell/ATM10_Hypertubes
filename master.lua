@@ -22,21 +22,20 @@ local Master = {}
 -- ===========================================================================
 -- 1. TOPOLOGY  (the only thing this computer has to be told)
 -- ===========================================================================
---  Lives in /topology.lua, NOT in this file. The installer overwrites every
---  program it manages, and the topology is the one piece of configuration
---  that is laborious to retype, so it is kept where nothing will overwrite it
---  -- next to the registry and the per-computer config.
+--  Nothing is typed in here or anywhere else. The map is assembled from what
+--  the panels and controllers say about themselves when they register, and
+--  lives in memory, rebuilt from the registry on every boot.
 --
 --  It holds no redstone and no computer ids. How a junction is wired is the
 --  node controller's business, and which computer runs it is learned at boot.
 
-local TOPOLOGY_FILE = "/topology.lua"
-
 ---@type table<NodeId, Node>
 NODES = {}
 
----Set when the topology is missing or broken. Unlike an unreachable node this
----never resolves on its own, so it holds the lockdown down until a reboot.
+---Set while the map is incomplete or contradictory: something has not
+---registered yet, or two computers disagree about a tube. Unlike an
+---unreachable node this does not resolve itself by waiting -- it resolves
+---when the missing computer is set up -- so it holds the lockdown down.
 ---@type string|nil
 local topologyError = nil
 
@@ -231,201 +230,154 @@ function Master.register(nodeId, entry)
   -- everything else.
   if changed then
     Master.log(nodeId .. " registered as computer " .. entry.computer)
-    if NODES[nodeId] == nil then
-      Master.log("  WARNING: " .. nodeId .. " is not in " .. TOPOLOGY_FILE)
-    end
     saveRegistry()
+
+    -- A new computer is a new piece of the map, and may be the piece that
+    -- completes it.
+    Master.refreshTopology()
   end
 end
 
 
 -- ===========================================================================
--- 3bb. TOPOLOGY FILE
+-- 3bb. TOPOLOGY  (assembled from what registered, never typed in)
 -- ===========================================================================
+--  Nobody writes a map of the network. Each computer knows one local fact --
+--  "the tube out of my east port goes to J_two" -- and the master matches up
+--  the two ends that name each other.
+--
+--  That is the only arrangement that cannot go stale: the answer comes from
+--  the computer standing next to the tube, so it is corrected by whoever
+--  rebuilds that junction, at the moment they rebuild it.
+--
+--  An access point has exactly one tube, so its port needs no name of its
+--  own and is always called this.
+local ACCESS_PORT = "tube"
 
-local TOPOLOGY_TEMPLATE = [==[
---[[ =========================================================================
-  topology.lua -- the shape of this hypertube network
-  -------------------------------------------------------------------------
-  Edit this file, then reboot the master.  edit /topology.lua
+---Rebuild NODES from the registry.
+---@return string[] problems  everything still missing or contradictory
+function Master.buildTopology()
+  ---@type table<NodeId, Node>
+  local nodes = {}
 
-  No program ever overwrites this file, including the installer.
+  ---What each node says its ports lead to: nodeId -> port -> neighbour id.
+  ---@type table<NodeId, table<PortId, NodeId>>
+  local claims = {}
 
-  One entry per node. Two kinds:
-
-    kind = "access"    an endpoint with a panel. Exactly one link.
-    kind = "junction"  a fork. Up to three links.
-
-  Every link must be written from BOTH ends. `to` is the neighbour and `port`
-  is the port the tube arrives at on that neighbour. That is all: there are no
-  travel times to measure. Routes are chosen by fewest nodes, so a tube is a
-  tube however long it is.
-
-  The port names are yours to choose; they only have to match what the node
-  controller was told during its setup. Compass directions are the obvious
-  choice for a junction, since that is how you describe it when you are
-  standing in front of it.
-========================================================================= ]]
-
-return {
-  ["AP_base"] = {
-    kind      = "access",
-    label     = "Main Base",
-    entryPort = "south",
-    links = {
-      south = { to = "J_hub", port = "north" },
-    },
-  },
-
-  ["J_hub"] = {
-    kind = "junction",
-    links = {
-      north = { to = "AP_base",   port = "south" },
-      south = { to = "AP_nether", port = "north" },
-      east  = { to = "AP_mine",   port = "west" },
-    },
-  },
-
-  ["AP_nether"] = {
-    kind      = "access",
-    label     = "Nether Portal",
-    entryPort = "north",
-    links = {
-      north = { to = "J_hub", port = "south" },
-    },
-  },
-
-  ["AP_mine"] = {
-    kind      = "access",
-    label     = "Deep Mine",
-    entryPort = "west",
-    links = {
-      west = { to = "J_hub", port = "east" },
-    },
-  },
-}
-]==]
-
----Check a hand-edited topology and report everything wrong with it at once,
----rather than one reboot per mistake.
----@param nodes table
----@return string[] problems
-local function validateTopology(nodes)
   local problems = {}
+  local function complain(text) problems[#problems + 1] = text end
 
-  local function complain(text)
-    problems[#problems + 1] = text
+  -- 1. every registration contributes a node and its claims
+  for nodeId, entry in pairs(registry) do
+    if type(entry) ~= "table" or type(entry.config) ~= "table" then
+      complain(nodeId .. " registered without a usable config")
+
+    elseif entry.kind == "panel" then
+      nodes[nodeId] = {
+        kind      = "access",
+        label     = entry.label or nodeId,
+        entryPort = ACCESS_PORT,
+        links     = {},
+      }
+      claims[nodeId] = { [ACCESS_PORT] = entry.config.neighbour }
+
+    elseif entry.kind == "node" then
+      local junctions = entry.config.junctions
+      local junction = type(junctions) == "table" and junctions[nodeId] or nil
+      if junction == nil then
+        complain(nodeId .. " registered as a junction but its config has no such junction")
+      else
+        nodes[nodeId] = { kind = "junction", links = {} }
+        claims[nodeId] = junction.neighbours or {}
+      end
+    end
   end
 
-  for nodeId, node in pairs(nodes) do
-    if type(node) ~= "table" then
-      complain(nodeId .. " is not a table")
+  -- 2. pair the halves
+  for nodeId, ports in pairs(claims) do
+    for port, neighbourId in pairs(ports) do
+      if type(neighbourId) ~= "string" or neighbourId == "" then
+        complain(nodeId .. "." .. port .. ": nothing named at the far end")
 
-    else
-      if node.kind ~= "access" and node.kind ~= "junction" then
-        complain(nodeId .. ": kind must be \"access\" or \"junction\"")
-      end
-      if type(node.links) ~= "table" or next(node.links) == nil then
-        complain(nodeId .. " has no links")
+      elseif neighbourId == nodeId then
+        complain(nodeId .. "." .. port .. " points at itself")
+
+      elseif nodes[neighbourId] == nil then
+        complain(nodeId .. "." .. port .. " leads to " .. neighbourId
+          .. ", which has not registered")
 
       else
-        local count = 0
-        for port, link in pairs(node.links) do
-          count = count + 1
-
-          if type(link) ~= "table" or type(link.to) ~= "string" then
-            complain(nodeId .. "." .. tostring(port) .. " has no 'to'")
-
-          else
-            local other = nodes[link.to]
-            if other == nil then
-              complain(nodeId .. "." .. port .. " points at " .. link.to
-                .. ", which is not in this file")
-
-            else
-              -- A link has to exist from both ends, and the two halves have to
-              -- agree, or a route will be built that the junctions cannot make.
-              local back = nil
-              if type(link.port) == "string" and type(other.links) == "table" then
-                back = other.links[link.port]
-              end
-
-              if type(link.port) ~= "string" then
-                complain(nodeId .. "." .. port .. " has no 'port' on " .. link.to)
-              elseif type(back) ~= "table" then
-                complain(link.to .. " has no link on port " .. link.port
-                  .. " back to " .. nodeId)
-              elseif back.to ~= nodeId then
-                complain(link.to .. "." .. link.port .. " points at "
-                  .. tostring(back.to) .. ", not back at " .. nodeId)
-              elseif back.port ~= port then
-                complain(nodeId .. "." .. port .. " and " .. link.to .. "."
-                  .. link.port .. " disagree about which port they meet at")
-              end
-            end
-          end
+        -- Which of the neighbour's ports names us back? Only one may, or
+        -- there is no way to tell the two tubes apart.
+        local facing = {}
+        for otherPort, otherNeighbour in pairs(claims[neighbourId] or {}) do
+          if otherNeighbour == nodeId then facing[#facing + 1] = otherPort end
         end
 
-        if node.kind == "junction" and count > 3 then
-          complain(nodeId .. " has " .. count .. " links; a junction has at most 3")
-        end
-        if node.kind == "access" and count ~= 1 then
-          complain(nodeId .. " has " .. count .. " links; an access point has 1")
+        if #facing == 0 then
+          complain(neighbourId .. " does not point back at " .. nodeId
+            .. " (check its setup)")
+        elseif #facing > 1 then
+          complain(neighbourId .. " claims " .. #facing .. " tubes to " .. nodeId
+            .. "; they cannot be told apart")
+        else
+          nodes[nodeId].links[port] = { to = neighbourId, port = facing[1] }
         end
       end
     end
   end
 
+  -- 3. shapes that would break routing
+  for nodeId, node in pairs(nodes) do
+    local count = 0
+    for _ in pairs(node.links) do count = count + 1 end
+
+    if node.kind == "junction" and count > 3 then
+      complain(nodeId .. " has " .. count .. " tubes; a junction has at most 3")
+    end
+  end
+
+  NODES = nodes
   table.sort(problems)
   return problems
 end
 
----Read /topology.lua. Writes a worked example on the very first boot, so the
----answer to "what goes in it?" is a file you can edit rather than a manual.
----@return boolean ok
----@return string|nil err
-function Master.loadTopology()
-  if not fs.exists(TOPOLOGY_FILE) then
-    local file = fs.open(TOPOLOGY_FILE, "w")
-    if file ~= nil then
-      file.write(TOPOLOGY_TEMPLATE)
-      file.close()
-      return false, "no topology yet -- an example was written to " .. TOPOLOGY_FILE
-    end
-    return false, "no topology, and " .. TOPOLOGY_FILE .. " could not be written"
-  end
-
-  local chunk, syntaxError = loadfile(TOPOLOGY_FILE)
-  if chunk == nil then
-    return false, TOPOLOGY_FILE .. ": " .. tostring(syntaxError)
-  end
-
-  local ok, result = pcall(chunk)
-  if not ok then
-    return false, TOPOLOGY_FILE .. ": " .. tostring(result)
-  end
-  if type(result) ~= "table" or next(result) == nil then
-    return false, TOPOLOGY_FILE .. " did not return any nodes"
-  end
-
-  local problems = validateTopology(result)
-  if #problems > 0 then
-    Master.log(TOPOLOGY_FILE .. " has " .. #problems .. " problem(s):")
-    for _, problem in ipairs(problems) do Master.log("  " .. problem) end
-    return false, "topology has " .. #problems .. " problem(s); see the master"
-  end
-
-  NODES = result
+---Rebuild the map and decide whether the network can run on it.
+---Called at boot and whenever a registration changes something.
+function Master.refreshTopology()
+  local problems = Master.buildTopology()
 
   local accessPoints, junctions = 0, 0
   for _, node in pairs(NODES) do
     if node.kind == "access" then accessPoints = accessPoints + 1 end
     if node.kind == "junction" then junctions = junctions + 1 end
   end
-  Master.log("topology: " .. accessPoints .. " access points, "
-    .. junctions .. " junctions")
 
-  return true, nil
+  if next(NODES) == nil then
+    topologyError = "waiting for the first computer to register"
+    Master.setLockdown(topologyError)
+    return
+  end
+
+  if #problems > 0 then
+    Master.log("topology: " .. accessPoints .. " access points, " .. junctions
+      .. " junctions, " .. #problems .. " problem(s):")
+    for _, problem in ipairs(problems) do Master.log("  " .. problem) end
+
+    topologyError = "incomplete map: " .. problems[1]
+    Master.setLockdown(topologyError)
+    return
+  end
+
+  Master.log("topology: " .. accessPoints .. " access points, "
+    .. junctions .. " junctions, all linked")
+
+  -- The map is sound. Whether the network is actually THERE is the audit's
+  -- question, so ask it now rather than sitting locked until the next round.
+  if topologyError ~= nil then
+    topologyError = nil
+    Master.beginAudit()
+  end
 end
 
 
@@ -1234,12 +1186,7 @@ function Master.main(cfg)
   -- No discover broadcast here: the first audit sends one a second from now,
   -- and doing both made every panel and controller announce itself twice.
 
-  local ok, err = Master.loadTopology()
-  if not ok then
-    topologyError = tostring(err)
-    Master.log("NO TOPOLOGY: " .. topologyError)
-    Master.log("edit " .. TOPOLOGY_FILE .. " and reboot")
-  end
+  Master.refreshTopology()
 
   -- Junctions are levels, so every controller has already put its own
   -- junctions straight on ITS boot: there is no stale switch state to undo.

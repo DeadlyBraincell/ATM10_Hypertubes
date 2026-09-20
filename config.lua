@@ -28,18 +28,20 @@ local MODES = { "control", "sensor", "both" }
 ---@field lights   table<string, string|nil>  "green"/"red" -> side, absent if not built
 
 ---@class JunctionConfig
----@field side      string   redstone output driving this junction
----@field a         PortId   one end of the straight run
----@field b         PortId   the other end of the straight run
----@field branch    PortId   the side branch
----@field right     PortId   a or b: where a pod from the branch goes on a LOW line
----@field scanner   string|nil  redstone input side of this junction's scanner
+---@field side       string   redstone output driving this junction
+---@field a          PortId   one end of the straight run
+---@field b          PortId   the other end of the straight run
+---@field branch     PortId   the side branch
+---@field right      PortId   a or b: where a pod from the branch goes on a LOW line
+---@field scanner    string|nil  redstone input side of this junction's scanner
+---@field neighbours table<PortId, NodeId>  what each port's tube leads to
 
 ---@class HypertubeConfig
 ---@field role      "master"|"panel"|"node"
 ---@field frequency number
 ---@field node      NodeId|nil                      panels
 ---@field label     string|nil                      panels
+---@field neighbour NodeId|nil                      panels: what its tube leads to
 ---@field wiring    PanelWiring|nil                 panels
 ---@field mode      "control"|"sensor"|"both"|nil   controllers
 ---@field junctions table<NodeId, JunctionConfig>|nil  controllers
@@ -89,6 +91,9 @@ function config.isComplete(cfg)
     if type(cfg.node) ~= "string" or cfg.node == "" then
       return false, "access point id"
     end
+    if type(cfg.neighbour) ~= "string" or cfg.neighbour == "" then
+      return false, "what this station's tube leads to"
+    end
     local wiring = cfg.wiring
     if type(wiring) ~= "table"
       or type(wiring.doors) ~= "string"
@@ -105,6 +110,14 @@ function config.isComplete(cfg)
       for _, field in ipairs({ "side", "a", "b", "branch", "right" }) do
         if type(junction[field]) ~= "string" then
           return false, nodeId .. "." .. field
+        end
+      end
+      if type(junction.neighbours) ~= "table" then
+        return false, nodeId .. " neighbours"
+      end
+      for _, port in ipairs({ junction.a, junction.b, junction.branch }) do
+        if type(junction.neighbours[port]) ~= "string" then
+          return false, nodeId .. ": what " .. port .. " leads to"
         end
       end
     end
@@ -250,6 +263,14 @@ local function panelWizard(cfg, existing)
     existing and existing.node)
   cfg.label = ask("Name to show on panels", (existing and existing.label) or cfg.node)
 
+  -- The master builds the map of the network out of these answers, so this is
+  -- the one question that describes the world rather than this computer.
+  print("")
+  print("   follow this station's tube: the first junction or station it")
+  print("   reaches is its neighbour. Use that computer's node id.")
+  cfg.neighbour = ask("Node at the other end of the tube",
+    existing and existing.neighbour)
+
   local wiring = (existing and existing.wiring) or {}
   local lights = wiring.lights or {}
 
@@ -303,13 +324,27 @@ local function junctionWizard(nodeId, existing)
   print("   next junction that has one.")
   local scanner = askOptionalSide("Tube Scanner input side", existing.scanner)
 
+  -- Where each tube goes. The master assembles the whole map from these, by
+  -- matching up the two ends that name each other, so nobody types a topology
+  -- file and nothing can disagree with the computer at the far end.
+  local was = existing.neighbours or {}
+  print("")
+  print("   where does each tube from this junction lead? Name the node id of")
+  print("   the next junction or station on it, not the final destination.")
+  local neighbours = {
+    [a]      = ask("  " .. a .. " leads to", was[a]),
+    [b]      = ask("  " .. b .. " leads to", was[b]),
+    [branch] = ask("  " .. branch .. " leads to", was[branch]),
+  }
+
   return {
-    side    = side,
-    a       = a,
-    b       = b,
-    branch  = branch,
-    right   = right,
-    scanner = scanner,
+    side       = side,
+    a          = a,
+    b          = b,
+    branch     = branch,
+    right      = right,
+    scanner    = scanner,
+    neighbours = neighbours,
   }
 end
 
@@ -348,6 +383,7 @@ local function summarise(cfg)
 
   if cfg.role == "panel" then
     print("  node      " .. tostring(cfg.node) .. "  (" .. tostring(cfg.label) .. ")")
+    print("  tube to   " .. tostring(cfg.neighbour))
     print("  doors     " .. cfg.wiring.doors)
     print("  scanner   " .. cfg.wiring.detector)
     for colour, side in pairs(cfg.wiring.lights) do
@@ -362,6 +398,9 @@ local function summarise(cfg)
       print("      straight  " .. junction.a .. " <-> " .. junction.b)
       print("      branch    " .. junction.branch
         .. "  (right " .. junction.right .. ", left " .. left .. ")")
+      for _, port in ipairs({ junction.a, junction.b, junction.branch }) do
+        print("      " .. port .. " -> " .. tostring((junction.neighbours or {})[port]))
+      end
       print("      scanner   " .. (junction.scanner or "none fitted"))
     end
   end
