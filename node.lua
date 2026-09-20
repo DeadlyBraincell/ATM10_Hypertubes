@@ -112,17 +112,28 @@ local function checkConfig()
     if MODE ~= "sensor" then
       if node.side == nil then error(nodeId .. " has no output side", 0) end
 
-      for _, field in ipairs({ "a", "b", "branch", "right" }) do
-        if type(node[field]) ~= "string" or node[field] == "" then
-          error(nodeId .. " is missing its " .. field .. " port", 0)
+      -- A port may lead nowhere: a junction with an arm that is not built yet
+      -- still routes perfectly well between the two that are.
+      local connected = {}
+      for _, port in pairs({ node.a, node.b, node.branch }) do
+        if type(port) ~= "string" or port == "" then
+          error(nodeId .. " has a port that is neither a node id nor blank", 0)
         end
+        if connected[port] then
+          error(nodeId .. " has two tubes leading to " .. port
+            .. "; it could not route between them", 0)
+        end
+        connected[port] = true
       end
-      if node.a == node.b or node.a == node.branch or node.b == node.branch then
-        error(nodeId .. " has two tubes leading to the same node; it could not"
-          .. " route between them", 0)
+
+      local count = 0
+      for _ in pairs(connected) do count = count + 1 end
+      if count < 2 then
+        error(nodeId .. " has fewer than two tubes connected", 0)
       end
-      if node.right ~= node.a and node.right ~= node.b then
-        error(nodeId .. " right must be " .. node.a .. " or " .. node.b, 0)
+
+      if node.right ~= nil and node.right ~= node.a and node.right ~= node.b then
+        error(nodeId .. " right must be one of its straight ends", 0)
       end
 
       if usedSides[node.side] ~= nil then
@@ -159,7 +170,11 @@ end
 ---@param exit  PortId
 ---@return boolean|nil level  nil when the junction cannot make that move at all
 local function levelFor(node, entry, exit)
+  -- nil never matches: a port that leads nowhere can be neither end of a move
+  if entry == nil or exit == nil then return nil end
+
   if entry == node.branch then
+    if node.right == nil then return nil end
     if exit == node.right then return false end
     if exit == node.a or exit == node.b then return true end   -- the other one: left
     return nil

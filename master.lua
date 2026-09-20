@@ -212,14 +212,38 @@ end
 ---arrives rather than at some later checkpoint: whatever happens next, the file
 ---already describes what is out there. Re-announcements from a computer we
 ---already have on file are liveness, not registration, and only touch lastSeen.
+---Deep equality, enough to tell one registration from another.
+---@param a any
+---@param b any
+---@return boolean
+local function same(a, b)
+  if a == b then return true end
+  if type(a) ~= "table" or type(b) ~= "table" then return false end
+
+  for key, value in pairs(a) do
+    if not same(value, b[key]) then return false end
+  end
+  for key in pairs(b) do
+    if a[key] == nil then return false end
+  end
+  return true
+end
+
 ---@param nodeId NodeId
 ---@param entry  Registration
 function Master.register(nodeId, entry)
   local before = registry[nodeId]
+
+  -- The CONFIG has to be part of this. It is the whole reason a registration
+  -- is interesting: it carries which tubes lead where. Comparing only the
+  -- computer id meant re-running setup on a panel changed nothing here --
+  -- the new answers were dropped, never saved, and the master kept routing
+  -- from a map that no longer matched the world.
   local changed = before == nil
     or before.computer ~= entry.computer
     or before.label ~= entry.label
     or before.kind ~= entry.kind
+    or not same(before.config, entry.config)
 
   registry[nodeId] = entry
   Master.registerPeer(nodeId, entry.computer)
@@ -298,11 +322,15 @@ function Master.buildTopology()
         -- A junction's ports are named for where they lead, so each port name
         -- IS the claim. Two tubes to the same place would be the same key,
         -- which is exactly the pair a junction could never route between.
-        claims[nodeId] = {
-          [junction.a]      = junction.a,
-          [junction.b]      = junction.b,
-          [junction.branch] = junction.branch,
-        }
+        --
+        -- Built by assignment rather than as a literal: a port that leads
+        -- nowhere is nil, and `{ [nil] = nil }` is an error, not an empty
+        -- entry.
+        local claim = {}
+        for _, port in pairs({ junction.a, junction.b, junction.branch }) do
+          if type(port) == "string" and port ~= "" then claim[port] = port end
+        end
+        claims[nodeId] = claim
       end
     end
   end

@@ -108,10 +108,17 @@ function config.isComplete(cfg)
       return false, "junctions"
     end
     for nodeId, junction in pairs(cfg.junctions) do
-      for _, field in ipairs({ "side", "a", "b", "branch", "right" }) do
-        if type(junction[field]) ~= "string" then
-          return false, nodeId .. "." .. field
-        end
+      if type(junction.side) ~= "string" then
+        return false, nodeId .. " output side"
+      end
+
+      -- a/b/branch/right may each be absent: a port can lead nowhere
+      local connected = 0
+      for _, port in pairs({ junction.a, junction.b, junction.branch }) do
+        if type(port) == "string" and port ~= "" then connected = connected + 1 end
+      end
+      if connected < 2 then
+        return false, nodeId .. ": what its tubes lead to"
       end
     end
   end
@@ -226,19 +233,30 @@ local function askYesNo(label, default)
   return answer:sub(1, 1):lower() == "y"
 end
 
----@param label   string
----@param taken   string[]  names already used on this junction
----@param default string|nil
----@return string
-local function askPort(label, taken, default)
+---@param label    string
+---@param taken    string[]  nodes already named on this junction
+---@param default  string|nil
+---@param optional boolean|nil  blank means "this tube is not built"
+---@return string|nil
+local function askPort(label, taken, default, optional)
   while true do
-    local answer = ask(label, default)
+    local answer
+    if optional then
+      answer = askOptional(label, default)
+      if answer == nil then return nil end
+    else
+      answer = ask(label, default)
+    end
+
     local clash = false
     for _, used in ipairs(taken) do
       if used == answer then clash = true end
     end
     if not clash then return answer end
-    print("  " .. answer .. " is already used on this junction")
+
+    -- Two tubes to the same node would be the same port name, and a junction
+    -- cannot route between two ports it cannot tell apart.
+    print("  a tube to " .. answer .. " is already on this junction")
   end
 end
 
@@ -295,10 +313,27 @@ local function junctionWizard(nodeId, existing)
   print("   name the node each of the three tubes leads to -- the next")
   print("   junction or station on it, not the final destination.")
 
+  print("   leave one blank if that tube is not built yet")
+
   local side = askSide("Redstone output side", existing.side or "top")
-  local a = askPort("Straight run: one end leads to", {}, existing.a)
-  local b = askPort("Straight run: other end leads to", { a }, existing.b)
-  local branch = askPort("The side branch leads to", { a, b }, existing.branch)
+
+  -- Which of the three is unconnected matters: a/b are the straight run and
+  -- branch is the side, and that is fixed by the block, not by which tubes
+  -- happen to be built. Answer for the junction as it sits in the world and
+  -- leave the unbuilt one blank.
+  local a = askPort("Straight run: one end leads to", {}, existing.a, true)
+  local b = askPort("Straight run: other end leads to", { a }, existing.b, true)
+  local branch = askPort("The side branch leads to", { a, b }, existing.branch, true)
+
+  local connected = 0
+  for _, port in pairs({ a, b, branch }) do
+    if port ~= nil then connected = connected + 1 end
+  end
+  if connected < 2 then
+    print("")
+    print("   a junction needs at least two tubes to be worth anything.")
+    return junctionWizard(nodeId, existing)
+  end
 
   -- The behaviour a pod meets depends on where it came in:
   --   from a or b, line low  -> carries straight on
@@ -308,10 +343,18 @@ local function junctionWizard(nodeId, existing)
   -- how the junction sits in the world. Send somebody through from the branch
   -- with the line off and write down where they come out.
   print("")
-  print("   a pod entering from " .. branch .. " with the line OFF leaves to")
-  print("   its RIGHT. Which port is that?")
-  local right = askFrom("  right-hand exit from " .. branch,
-    { a, b }, existing.right or a)
+  -- Only worth asking when there is a branch to arrive from and somewhere for
+  -- it to go.
+  local right = nil
+  local straightEnds = {}
+  for _, port in pairs({ a, b }) do straightEnds[#straightEnds + 1] = port end
+
+  if branch ~= nil and #straightEnds > 0 then
+    print("   a pod entering from " .. branch .. " with the line OFF leaves to")
+    print("   its RIGHT. Which way is that?")
+    right = askFrom("  right-hand exit from " .. branch,
+      straightEnds, existing.right or straightEnds[1])
+  end
 
   -- A scanner sits at the junction and reports the junction: something went
   -- through, with no way to tell which branch. So there is nothing to ask
@@ -379,10 +422,14 @@ local function summarise(cfg)
     for nodeId, junction in pairs(cfg.junctions) do
       local left = (junction.right == junction.a) and junction.b or junction.a
       print("  " .. nodeId .. " on " .. junction.side)
-      print("      straight  " .. junction.a .. " <-> " .. junction.b)
-      print("      branch    to " .. junction.branch)
-      print("      from " .. junction.branch .. ": right " .. junction.right
-        .. ", left " .. left)
+      local none = "(not built)"
+      print("      straight  " .. (junction.a or none)
+        .. " <-> " .. (junction.b or none))
+      print("      branch    to " .. (junction.branch or none))
+      if junction.right ~= nil then
+        print("      from " .. junction.branch .. ": right " .. junction.right
+          .. ", left " .. (left or none))
+      end
       print("      scanner   " .. (junction.scanner or "none fitted"))
     end
   end
