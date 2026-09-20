@@ -19,7 +19,7 @@
   fresh computer none of it exists yet.
 =========================================================================== ]]
 
-local DEFAULT_REPO = "https://raw.githubusercontent.com/DeadlyBraincell/Hypertube_Router/main/"
+local DEFAULT_REPO = "https://raw.githubusercontent.com/DeadlyBraincell/ATM10_Hypertubes/main/"
 
 -- Every computer gets these.
 local SHARED = { "common.lua", "config.lua", "startup.lua" }
