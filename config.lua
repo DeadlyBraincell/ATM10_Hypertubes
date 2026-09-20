@@ -27,6 +27,8 @@ local MODES = { "control", "sensor", "both" }
 ---@field detector string
 ---@field lights   table<string, string|nil>  "green"/"red" -> side, absent if not built
 
+---A junction's ports are NAMED for where they lead, so each of a/b/branch is
+---both a port name and the node id at the far end of that tube.
 ---@class JunctionConfig
 ---@field side       string   redstone output driving this junction
 ---@field a          PortId   one end of the straight run
@@ -34,7 +36,6 @@ local MODES = { "control", "sensor", "both" }
 ---@field branch     PortId   the side branch
 ---@field right      PortId   a or b: where a pod from the branch goes on a LOW line
 ---@field scanner    string|nil  redstone input side of this junction's scanner
----@field neighbours table<PortId, NodeId>  what each port's tube leads to
 
 ---@class HypertubeConfig
 ---@field role      "master"|"panel"|"node"
@@ -110,14 +111,6 @@ function config.isComplete(cfg)
       for _, field in ipairs({ "side", "a", "b", "branch", "right" }) do
         if type(junction[field]) ~= "string" then
           return false, nodeId .. "." .. field
-        end
-      end
-      if type(junction.neighbours) ~= "table" then
-        return false, nodeId .. " neighbours"
-      end
-      for _, port in ipairs({ junction.a, junction.b, junction.branch }) do
-        if type(junction.neighbours[port]) ~= "string" then
-          return false, nodeId .. ": what " .. port .. " leads to"
         end
       end
     end
@@ -295,12 +288,17 @@ local function junctionWizard(nodeId, existing)
   print("")
   print("-- junction " .. nodeId .. " --")
 
-  print("   name the three tubes meeting here, as seen from the junction")
+  -- A port is named for where it leads, so naming the three tubes and saying
+  -- where they go is one question, not two. It also means a junction cannot
+  -- describe two tubes to the same place, which is a thing it could not route
+  -- between anyway.
+  print("   name the node each of the three tubes leads to -- the next")
+  print("   junction or station on it, not the final destination.")
 
   local side = askSide("Redstone output side", existing.side or "top")
-  local a = askPort("Straight run: one end", {}, existing.a)
-  local b = askPort("Straight run: other end", { a }, existing.b)
-  local branch = askPort("The side branch", { a, b }, existing.branch)
+  local a = askPort("Straight run: one end leads to", {}, existing.a)
+  local b = askPort("Straight run: other end leads to", { a }, existing.b)
+  local branch = askPort("The side branch leads to", { a, b }, existing.branch)
 
   -- The behaviour a pod meets depends on where it came in:
   --   from a or b, line low  -> carries straight on
@@ -324,27 +322,13 @@ local function junctionWizard(nodeId, existing)
   print("   next junction that has one.")
   local scanner = askOptionalSide("Tube Scanner input side", existing.scanner)
 
-  -- Where each tube goes. The master assembles the whole map from these, by
-  -- matching up the two ends that name each other, so nobody types a topology
-  -- file and nothing can disagree with the computer at the far end.
-  local was = existing.neighbours or {}
-  print("")
-  print("   where does each tube from this junction lead? Name the node id of")
-  print("   the next junction or station on it, not the final destination.")
-  local neighbours = {
-    [a]      = ask("  " .. a .. " leads to", was[a]),
-    [b]      = ask("  " .. b .. " leads to", was[b]),
-    [branch] = ask("  " .. branch .. " leads to", was[branch]),
-  }
-
   return {
-    side       = side,
-    a          = a,
-    b          = b,
-    branch     = branch,
-    right      = right,
-    scanner    = scanner,
-    neighbours = neighbours,
+    side    = side,
+    a       = a,
+    b       = b,
+    branch  = branch,
+    right   = right,
+    scanner = scanner,
   }
 end
 
@@ -396,11 +380,9 @@ local function summarise(cfg)
       local left = (junction.right == junction.a) and junction.b or junction.a
       print("  " .. nodeId .. " on " .. junction.side)
       print("      straight  " .. junction.a .. " <-> " .. junction.b)
-      print("      branch    " .. junction.branch
-        .. "  (right " .. junction.right .. ", left " .. left .. ")")
-      for _, port in ipairs({ junction.a, junction.b, junction.branch }) do
-        print("      " .. port .. " -> " .. tostring((junction.neighbours or {})[port]))
-      end
+      print("      branch    to " .. junction.branch)
+      print("      from " .. junction.branch .. ": right " .. junction.right
+        .. ", left " .. left)
       print("      scanner   " .. (junction.scanner or "none fitted"))
     end
   end

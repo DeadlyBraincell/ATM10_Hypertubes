@@ -243,8 +243,14 @@ end
 -- 3bb. TOPOLOGY  (assembled from what registered, never typed in)
 -- ===========================================================================
 --  Nobody writes a map of the network. Each computer knows one local fact --
---  "the tube out of my east port goes to J_two" -- and the master matches up
---  the two ends that name each other.
+--  which node each of its tubes reaches -- and the master matches up the two
+--  ends that name each other.
+--
+--  A junction's ports are NAMED for where they lead, so "which port" and
+--  "leading where" are the same answer. It falls out of that that the master
+--  talks to a controller in terms a person would use: a pod arriving from
+--  AP_base and leaving towards J_two, rather than arriving north and leaving
+--  east.
 --
 --  That is the only arrangement that cannot go stale: the answer comes from
 --  the computer standing next to the tube, so it is corrected by whoever
@@ -288,7 +294,15 @@ function Master.buildTopology()
         complain(nodeId .. " registered as a junction but its config has no such junction")
       else
         nodes[nodeId] = { kind = "junction", links = {} }
-        claims[nodeId] = junction.neighbours or {}
+
+        -- A junction's ports are named for where they lead, so each port name
+        -- IS the claim. Two tubes to the same place would be the same key,
+        -- which is exactly the pair a junction could never route between.
+        claims[nodeId] = {
+          [junction.a]      = junction.a,
+          [junction.b]      = junction.b,
+          [junction.branch] = junction.branch,
+        }
       end
     end
   end

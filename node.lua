@@ -55,6 +55,9 @@ local CFG = nil
 ---@type "control"|"sensor"|"both"
 local MODE = "both"
 
+---Ports are named for the node they lead to, so `a`, `b` and `branch` are node
+---ids. The master therefore asks for a move in the same terms: a pod arriving
+---from AP_base, leaving towards J_two.
 ---@class ManagedNode
 ---@field side      string  redstone output driving this junction
 ---@field a         PortId  one end of the straight run
@@ -69,8 +72,8 @@ local MODE = "both"
 ---Filled from /hypertube.cfg by the setup wizard. One entry per junction this
 ---computer is wired to, each looking like:
 ---
----  ["J_hub"] = { side = "top", a = "north", b = "south", branch = "east",
----                right = "north", scanner = "left" }
+---  ["J_hub"] = { side = "top", a = "AP_base", b = "J_two", branch = "AP_mine",
+---                right = "AP_base", scanner = "left" }
 ---@type table<NodeId, ManagedNode>
 local MANAGED = {}
 
@@ -115,7 +118,8 @@ local function checkConfig()
         end
       end
       if node.a == node.b or node.a == node.branch or node.b == node.branch then
-        error(nodeId .. " uses the same port name twice", 0)
+        error(nodeId .. " has two tubes leading to the same node; it could not"
+          .. " route between them", 0)
       end
       if node.right ~= node.a and node.right ~= node.b then
         error(nodeId .. " right must be " .. node.a .. " or " .. node.b, 0)
