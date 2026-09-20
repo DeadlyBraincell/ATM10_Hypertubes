@@ -13,7 +13,7 @@
   A second argument overrides where the files come from, useful while testing a
   branch. It is remembered afterwards:
 
-      install panel https://raw.githubusercontent.com/me/repo/dev/
+      install panel https://raw.githubusercontent.com/DeadlyBraincell/ATM10_Hypertubes/Dev/
 
   Standalone on purpose: it uses no part of the hypertube code, because on a
   fresh computer none of it exists yet.
